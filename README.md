@@ -38,13 +38,18 @@ Kolom yang dipetakan meliputi No. PRK, No. PRK SKKI/Fix, No. WBS, Pos Anggaran, 
 
 ## Alur Input RAB dan Realisasi
 
-1. **Input Material**: buat master material dengan kriteria TM/TR, satuan, harga material, jasa pasang/bongkar, dan jenis MDU/NON MDU.
-2. **RAB Komponen**: kelompokkan komponen berdasarkan kriteria dan nama kegiatan; pilih material dari master atau masukkan harga manual serta kebutuhan per satuan kegiatan.
-3. **RAB Kegiatan**: pilih PRK dari hasil impor, kriteria, kegiatan, satuan, dan volume. Nilai RAB dihitung dari jumlah (kebutuhan komponen x harga material/jasa) x volume kegiatan.
-4. **Rekap Material**: kebutuhan dihitung dari volume RAB x kebutuhan material per satuan, lalu dibandingkan dengan pemakaian aktual.
-5. **Realisasi**: catat tanggal, volume terlaksana, nilai tagihan, dan nilai dibayar. Sisa volume ditampilkan pada tabel RAB Kegiatan.
+1. **Input Material**: buat master material dengan kriteria TM/TR, satuan, harga material, satu tarif jasa per satuan, dan jenis MDU/NON MDU.
+2. **Master Kegiatan**: kelola paket pekerjaan, nama kegiatan, satuan, kriteria, dan PRK acuan; data impor `DATABASE KEGIATAN` juga tersedia di sini.
+3. **RAB Komponen**: kelompokkan komponen berdasarkan kriteria dan nama kegiatan; pilih material dari master atau masukkan harga manual serta kebutuhan per satuan kegiatan.
+4. **RAB Kegiatan**: pilih PRK dari hasil impor, kriteria, kegiatan, satuan, dan volume. Nilai RAB dihitung dari jumlah (kebutuhan komponen x harga material + tarif jasa) x volume kegiatan.
+5. **Rekap Material**: kebutuhan dihitung dari volume RAB x kebutuhan material per satuan, lalu dibandingkan dengan pemakaian aktual.
+6. **Realisasi**: catat tanggal, volume terlaksana, nilai tagihan, dan nilai dibayar. Sisa volume ditampilkan pada tabel RAB Kegiatan.
 
-Workflow memakai tab terpisah yang dibuat otomatis oleh Apps Script: `RAB_MATERIAL`, `RAB_KOMPONEN`, `RAB_KEGIATAN`, `REKAP_MATERIAL`, dan `REALISASI`. Data hasil impor rekap tetap berada di tab `RABData`.
+Workflow memakai tab terpisah yang dibuat otomatis oleh Apps Script: `RAB_MATERIAL`, `DATABASE_KEGIATAN`, `RAB_KOMPONEN`, `RAB_KEGIATAN`, `REKAP_MATERIAL`, `PA_TRANSFERS`, dan `REALISASI`. Data hasil impor rekap tetap berada di tab `RABData`.
+
+**Finalisasi RAB ke PA** meminta konfirmasi, menolak transfer di atas saldo RAB, mengurangi `TOTAL RAB`, menambah `TOTAL PA`, dan menyamakan `NILAI KONTRAK` dengan saldo PA terbaru. Setiap transfer dicatat di `PA_TRANSFERS` dengan saldo sebelum/sesudah. Realisasi tetap dicatat terpisah dan tidak menjalankan proses tender atau penerbitan kontrak.
+
+Setiap baris impor memakai ID internal berbasis sheet dan nomor baris, termasuk baris yang hanya memiliki No. RAB. Apps Script menyimpan ID tersebut pada kolom `RECORD ID` agar total RAB, referensi kegiatan, dan transfer tetap mengarah ke record yang sama. Sebelum deployment, jalankan `npm run lint` dan `npm run build`; setelah mengubah Apps Script, deploy sebagai versi baru dan uji endpoint `?action=health` serta satu transfer pada spreadsheet uji.
 
 - [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
 - [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)

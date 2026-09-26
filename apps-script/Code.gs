@@ -1,16 +1,18 @@
 const DATA_SHEET_NAME = 'RABData'
 const WORKFLOW_SHEETS = {
   materials: 'RAB_MATERIAL',
+  activityCatalog: 'DATABASE_KEGIATAN',
   components: 'RAB_KOMPONEN',
   activities: 'RAB_KEGIATAN',
   materialRecap: 'REKAP_MATERIAL',
+  paTransfers: 'PA_TRANSFERS',
   realizations: 'REALISASI',
 }
 const DATA_HEADERS = [
   'NO.PRK', 'NO.PRK SKKI', 'NO.PRK FIX', 'NO.WBS', 'POS ANGGARAN', 'NO.RAB', 'NO.PA',
   'URAIAN', 'TOTAL PRK', 'RELOKASI', 'REVISI SKKI', 'TOTAL AKHIR', 'TOTAL RAB', 'TOTAL PA',
   'NOKONTRAK', 'VENDOR', 'NILAI KONTRAK', 'PENGEMBALIAN PA', 'PENGGANTIAN BIAYA', 'TAGIHAN',
-  'TOTAL BAYAR', 'SISA PRK', 'PROGRAM', 'TAHUN ANGGARAN', 'KETERANGAN', 'POS ANGGARAN',
+  'TOTAL BAYAR', 'SISA PRK', 'PROGRAM', 'TAHUN ANGGARAN', 'KETERANGAN', 'POS ANGGARAN', 'RECORD ID',
 ]
 
 const CLIENT_KEYS = {
@@ -21,7 +23,7 @@ const CLIENT_KEYS = {
   'NOKONTRAK': 'contractNumber', 'VENDOR': 'vendor', 'NILAI KONTRAK': 'contractValue',
   'PENGEMBALIAN PA': 'paReturn', 'PENGGANTIAN BIAYA': 'costReplacement', 'TAGIHAN': 'billed',
   'TOTAL BAYAR': 'paid', 'SISA PRK': 'prkRemaining', 'PROGRAM': 'program',
-  'TAHUN ANGGARAN': 'year', 'KETERANGAN': 'notes',
+  'TAHUN ANGGARAN': 'year', 'KETERANGAN': 'notes', 'RECORD ID': 'id',
 }
 
 function doGet(event) {
@@ -53,6 +55,13 @@ function doPost(event) {
     saveWorkflow_(payload.collection, payload.records)
     return json_({ ok: true, collection: payload.collection, rows: payload.records.length })
   }
+  if (payload.action === 'transferToPA') {
+    try {
+      return json_({ ok: true, ...transferToPA_(payload) })
+    } catch (error) {
+      return json_({ ok: false, error: error.message || 'Finalisasi ke PA gagal.' })
+    }
+  }
   if (payload.action !== 'save' || !Array.isArray(payload.records)) return json_({ ok: false, error: 'Permintaan simpan tidak valid.' })
   if (payload.records.length > 5000) return json_({ ok: false, error: 'Maksimum 5.000 baris per penyimpanan.' })
 
@@ -83,7 +92,7 @@ function getDataSheet_() {
 function toClientRecord_(row) {
   const result = {}
   Object.keys(CLIENT_KEYS).forEach((header) => { result[CLIENT_KEYS[header]] = row[header] })
-  result.id = result.prk || result.rabNumber || result.paNumber || `row-${row.sourceRow}`
+  result.id = result.id || `row-${row.sourceRow}`
   return result
 }
 
@@ -125,4 +134,64 @@ function getWorkflowSheet_(name) {
   if (!sheet) sheet = spreadsheet.insertSheet(name)
   if (sheet.getLastRow() === 0) sheet.getRange(1, 1, 1, 3).setValues([['ID', 'DATA_JSON', 'UPDATED_AT']])
   return sheet
+}
+
+function transferToPA_(payload) {
+  const amount = Number(payload.amount)
+  if (!payload.recordId) throw new Error('Data PRK yang akan difinalisasi tidak ditemukan.')
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('Nilai transfer harus lebih besar dari nol.')
+
+  const lock = LockService.getScriptLock()
+  lock.waitLock(10000)
+  try {
+    const sheet = getDataSheet_()
+    const values = sheet.getDataRange().getValues()
+    const headers = values.shift() || []
+    const rabIndex = headers.indexOf('TOTAL RAB')
+    const paIndex = headers.indexOf('TOTAL PA')
+    const contractIndex = headers.indexOf('NILAI KONTRAK')
+    if (rabIndex < 0 || paIndex < 0 || contractIndex < 0) throw new Error('Kolom TOTAL RAB, TOTAL PA, atau NILAI KONTRAK tidak ditemukan.')
+
+    let targetRow = -1
+    let target = null
+    values.forEach((row, index) => {
+      if (target) return
+      const source = { sourceRow: index + 2 }
+      headers.forEach((header, column) => { source[header] = row[column] })
+      const record = toClientRecord_(source)
+      if (String(record.id) === String(payload.recordId)) {
+        targetRow = index + 2
+        target = record
+      }
+    })
+    if (!target) throw new Error('PRK tidak ditemukan. Muat ulang data lalu coba lagi.')
+
+    const previousRab = Number(target.rabTotal) || 0
+    const previousPA = Number(target.paTotal) || 0
+    if (amount > previousRab + 0.000001) throw new Error(`Nilai transfer melebihi sisa RAB ${previousRab}.`)
+
+    const nextRab = Math.max(0, previousRab - amount)
+    const nextPA = previousPA + amount
+    const previousContract = Number(target.contractValue) || 0
+    try {
+      sheet.getRange(targetRow, rabIndex + 1).setValue(nextRab)
+      sheet.getRange(targetRow, paIndex + 1).setValue(nextPA)
+      sheet.getRange(targetRow, contractIndex + 1).setValue(nextPA)
+      const transfer = {
+        id: Utilities.getUuid(), recordId: target.id, prk: target.prk, rabNumber: target.rabNumber,
+        criteria: payload.criteria || '', description: target.description || '', date: payload.date || new Date().toISOString().slice(0, 10),
+        amount, rabBefore: previousRab, rabAfter: nextRab, paBefore: previousPA, paAfter: nextPA,
+        contractValue: nextPA, notes: String(payload.notes || '').trim(), createdAt: new Date().toISOString(),
+      }
+      getWorkflowSheet_(WORKFLOW_SHEETS.paTransfers).appendRow([transfer.id, JSON.stringify(transfer), new Date()])
+      return { transfer, record: { ...target, rabTotal: nextRab, paTotal: nextPA, contractValue: nextPA } }
+    } catch (error) {
+      sheet.getRange(targetRow, rabIndex + 1).setValue(previousRab)
+      sheet.getRange(targetRow, paIndex + 1).setValue(previousPA)
+      sheet.getRange(targetRow, contractIndex + 1).setValue(previousContract)
+      throw error
+    }
+  } finally {
+    lock.releaseLock()
+  }
 }

@@ -34,6 +34,11 @@
 .workflow-summary .workflow-sum-money strong { color: #0878b9; font-size: 16px; }
 .workflow-summary .workflow-criteria-count { justify-content: flex-start; gap: 7px; }
 .workflow-criteria-count span { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border: 1px solid #dbe9f1; border-radius: 4px; color: #0878b9; background: #f0f8fc; }
+.workflow-transfer-preview { display: flex; grid-column: 1/-1; align-items: center; justify-content: space-between; gap: 9px; padding: 11px; border: 1px solid #d9eaf2; border-radius: 4px; color: #0878b9; background: #f2f9fc; }
+.workflow-transfer-preview > div { display: grid; min-width: 0; gap: 4px; }
+.workflow-transfer-preview span { color: #718198; font-size: 8px; }
+.workflow-transfer-preview strong { overflow: hidden; color: #213b59; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-transfer-preview svg { flex: none; color: #ee7b2a; }
 .workflow-table-panel { overflow: hidden; }
 .workflow-table-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 15px 16px 11px; }
 .workflow-table-heading .eyebrow { margin: 0 0 4px; font-size: 8px; }
@@ -95,6 +100,9 @@
   .workflow-stepbar i { width: 10px; flex: none; }
   .workflow-form-panel { padding: 13px 11px; }
   .workflow-fields { grid-template-columns: 1fr; gap: 10px; }
+  .workflow-transfer-preview { align-items: flex-start; gap: 6px; padding: 8px; }
+  .workflow-transfer-preview > div { flex: 1; }
+  .workflow-transfer-preview strong { font-size: 8px; }
   .workflow-field input, .workflow-field select { height: 38px; }
   .workflow-summary { gap: 8px; padding: 12px 9px; }
   .workflow-summary-icon { width: 28px; height: 28px; }

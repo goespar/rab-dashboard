@@ -55,7 +55,7 @@ function normalizeRecord(row, headerRow, sheetName, rowIndex) {
     if (!key) return
     record[key] = NUMERIC_KEYS.has(key) ? toNumber(row[index]) : String(row[index] ?? '').trim()
   })
-  record.id = record.prk || record.rabNumber || record.paNumber || `${sheetName}-${rowIndex + 1}`
+  record.id = `${normalizedHeader(sheetName)}-row-${rowIndex + 1}`
   record.program = record.program || 'Lainnya'
   return record
 }
@@ -84,7 +84,55 @@ export async function importWorkbook(file) {
     .map((row, index) => normalizeRecord(row, headerRow, chosen.name, headerIndex + index + 1))
     .filter((record) => record.prk || record.rabNumber || record.paNumber || record.description)
   if (!records.length) throw new Error('Sheet ditemukan, tetapi tidak ada baris data anggaran untuk diimpor.')
-  return { records, sheetName: chosen.name }
+
+  const materialSheet = sheets.find((sheet) => sheet.name.trim().toUpperCase() === 'FORM MATERIAL & HARGA')
+  const materialHeaderIndex = materialSheet ? materialSheet.rows.slice(0, 10).findIndex((row) => {
+    const headers = row.map(normalizedHeader)
+    return headers.includes('URAIAN') && headers.includes('HARGAMATERIAL') && headers.includes('HARGAJASA') && headers.includes('KRITERIA')
+  }) : -1
+  const materials = materialHeaderIndex < 0 ? [] : materialSheet.rows.slice(materialHeaderIndex + 1)
+    .map((row, index) => ({
+      id: `master-${normalizedHeader(row[0])}-${normalizedHeader(row[8])}-${normalizedHeader(row[10])}-${index + 1}`,
+      code: '',
+      name: String(row[0] ?? '').trim(),
+      unit: String(row[2] ?? '').trim(),
+      materialPrice: toNumber(row[3]),
+      servicePrice: toNumber(row[4]),
+      componentActivity: String(row[8] ?? '').trim(),
+      operation: String(row[9] ?? '').trim(),
+      criteria: String(row[10] ?? '').trim().toUpperCase(),
+      source: String(row[11] ?? '').trim().toUpperCase(),
+      notes: '',
+      importedFrom: materialSheet.name,
+      sourceRow: materialHeaderIndex + index + 2,
+    }))
+    .filter((row) => row.name && ['TM', 'TR'].includes(row.criteria))
+
+  const activitySheet = sheets.find((sheet) => sheet.name.trim().toUpperCase() === 'DATABASE KEGIATAN')
+  const activityHeaderIndex = activitySheet ? activitySheet.rows.slice(0, 10).findIndex((row) => {
+    const headers = row.map(normalizedHeader)
+    return headers.includes('KEGIATAN') && headers.includes('KOMPONENPEKERJAAN') && headers.includes('SATUAN') && headers.includes('PRK')
+  }) : -1
+  const activityCatalog = activityHeaderIndex < 0 ? [] : activitySheet.rows.slice(activityHeaderIndex + 1)
+    .map((row, index) => {
+      const name = String(row[1] ?? '').trim()
+      const matchedMaterial = materials.find((material) => material.componentActivity.toLowerCase() === name.toLowerCase())
+      return {
+        id: `activity-${normalizedHeader(row[3])}-${normalizedHeader(name)}-${index + 1}`,
+        workPackage: String(row[0] ?? '').trim(),
+        name,
+        activity: name,
+        unit: String(row[2] ?? '').trim(),
+        prk: String(row[3] ?? '').trim(),
+        criteria: matchedMaterial?.criteria || 'TR',
+        importedFrom: activitySheet.name,
+        sourceSheet: activitySheet.name,
+        sourceRow: activityHeaderIndex + index + 2,
+      }
+    })
+    .filter((row) => row.name)
+
+  return { records, materials, activityCatalog, sheetName: chosen.name }
 }
 
 export async function exportWorkbook(records) {

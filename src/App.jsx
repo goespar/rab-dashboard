@@ -12,12 +12,14 @@ import './pln-theme.css'
 
 const STORAGE_KEY = 'rab-monitor-records-v1'
 const WORKFLOW_STORAGE_KEY = 'rab-monitor-workflow-v1'
-const EMPTY_COLLECTIONS = { materials: [], components: [], activities: [], materialRecap: [], realizations: [] }
+const EMPTY_COLLECTIONS = { materials: [], activityCatalog: [], components: [], activities: [], paTransfers: [], materialRecap: [], realizations: [] }
 const WORKFLOW_NAV = [
   { id: 'materials', label: 'Input Material', icon: Boxes, section: 'PERENCANAAN RAB' },
+  { id: 'activityCatalog', label: 'Master Kegiatan', icon: ClipboardList },
   { id: 'components', label: 'RAB Komponen', icon: Wrench },
   { id: 'activities', label: 'RAB Kegiatan', icon: ClipboardList },
-  { id: 'materialRecap', label: 'Rekap Material', icon: Boxes, section: 'REALISASI & REKAP' },
+  { id: 'materialRecap', label: 'Rekap Material', icon: Boxes, section: 'REKAP & FINALISASI' },
+  { id: 'paFinalization', label: 'Finalisasi ke PA', icon: ArrowDownToLine },
   { id: 'realizations', label: 'Realisasi', icon: Activity },
 ]
 
@@ -118,18 +120,10 @@ function App() {
     return Object.values(groups).sort((a, b) => b.pagu - a.pagu).slice(0, 5)
   }, [dashboardRecords])
   const workflowSummary = useMemo(() => {
-    const components = workflowCollections.components || []
     const activities = workflowCollections.activities || []
     const realizations = workflowCollections.realizations || []
-    const totals = activities.reduce((sum, activity) => {
-      const activityComponents = components.filter((component) => component.criteria === activity.criteria
-        && component.activity.trim().toLowerCase() === activity.name.trim().toLowerCase())
-      const unitCost = activityComponents.reduce((cost, component) => cost
-        + Number(component.quantityPerUnit || 0) * (Number(component.materialPrice || 0) + Number(component.servicePrice || 0)), 0)
-      return { ...sum, rab: sum.rab + unitCost * Number(activity.volume || 0) }
-    }, { rab: 0 })
     return {
-      rab: totals.rab,
+      rab: records.reduce((sum, record) => sum + Number(record.rabTotal || 0), 0),
       activities: activities.length,
       tm: activities.filter((activity) => activity.criteria === 'TM').length,
       tr: activities.filter((activity) => activity.criteria === 'TR').length,
@@ -137,7 +131,7 @@ function App() {
       billed: realizations.reduce((sum, item) => sum + Number(item.billed || 0), 0),
       paid: realizations.reduce((sum, item) => sum + Number(item.paid || 0), 0),
     }
-  }, [workflowCollections])
+  }, [workflowCollections, records])
 
   async function saveRecords(nextRecords, successMessage) {
     setRecords(nextRecords)
@@ -165,20 +159,28 @@ function App() {
     if (collection === 'activities' || collection === 'components') {
       const activitiesForTotals = collection === 'activities' ? nextRecords : workflowCollections.activities
       const componentsForTotals = collection === 'components' ? nextRecords : workflowCollections.components
-      const affectedPrks = new Set([
-        ...workflowCollections.activities.map((activity) => activity.prk).filter(Boolean),
-        ...activitiesForTotals.map((activity) => activity.prk).filter(Boolean),
-      ])
-      const totalsByPrk = new Map()
+      const affectedRecords = new Set()
+      const addAffectedRecord = (activity) => {
+        const record = records.find((item) => activity.programRecordId
+          ? item.id === activity.programRecordId
+          : item.prk === activity.prk || item.rabNumber === activity.rabNumber)
+        if (record) affectedRecords.add(record.id)
+        return record
+      }
+      workflowCollections.activities.forEach(addAffectedRecord)
+      activitiesForTotals.forEach(addAffectedRecord)
+      const totalsByRecord = new Map()
       activitiesForTotals.forEach((activity) => {
+        const sourceRecord = addAffectedRecord(activity)
+        if (!sourceRecord) return
         const matchingComponents = componentsForTotals.filter((component) => component.criteria === activity.criteria
           && component.activity.trim().toLowerCase() === activity.name.trim().toLowerCase())
         const unitCost = matchingComponents.reduce((sum, component) => sum
           + Number(component.quantityPerUnit || 0) * (Number(component.materialPrice || 0) + Number(component.servicePrice || 0)), 0)
-        totalsByPrk.set(activity.prk, (totalsByPrk.get(activity.prk) || 0) + unitCost * Number(activity.volume || 0))
+        totalsByRecord.set(sourceRecord.id, (totalsByRecord.get(sourceRecord.id) || 0) + unitCost * Number(activity.volume || 0))
       })
-      const updatedProgramRecords = records.map((record) => affectedPrks.has(record.prk)
-        ? { ...record, rabTotal: totalsByPrk.get(record.prk) || 0 }
+      const updatedProgramRecords = records.map((record) => affectedRecords.has(record.id)
+        ? { ...record, rabTotal: totalsByRecord.get(record.id) || 0 }
         : record)
       if (updatedProgramRecords.some((record, index) => record !== records[index])) {
         await saveRecords(updatedProgramRecords, 'Total RAB per PRK diperbarui.')
@@ -200,6 +202,47 @@ function App() {
     }
   }
 
+  async function transferToPA(transfer) {
+    const source = records.find((record) => record.id === transfer.recordId)
+    const amount = Number(transfer.amount) || 0
+    const remaining = Number(source?.rabTotal) || 0
+    if (!source || amount <= 0 || amount > remaining) {
+      setNotice('Finalisasi ditolak: nilai harus lebih dari nol dan tidak melebihi sisa RAB.')
+      return false
+    }
+    const confirmed = window.confirm(`Finalisasi ${formatCurrency(amount)} dari RAB ${source.prk || source.rabNumber} ke PA? Sisa RAB berkurang dan nilai PA menjadi nilai kontrak.`)
+    if (!confirmed) return false
+
+    try {
+      const response = await fetch('/api/apps-script', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'transferToPA', ...transfer }),
+      })
+      const result = await response.json()
+      if (!response.ok || !result.ok) throw new Error(result.error || 'Finalisasi gagal.')
+      const updatedRecord = result.record || {
+        ...source,
+        rabTotal: Math.max(0, remaining - amount),
+        paTotal: Number(source.paTotal || 0) + amount,
+        contractValue: Number(source.paTotal || 0) + amount,
+      }
+      const nextRecords = records.map((record) => record.id === source.id ? updatedRecord : record)
+      setRecords(nextRecords)
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextRecords))
+      const nextTransfers = [result.transfer, ...workflowCollections.paTransfers]
+      const nextCollections = { ...workflowCollections, paTransfers: nextTransfers }
+      setWorkflowCollections(nextCollections)
+      window.localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(nextCollections))
+      setConnection('cloud')
+      setNotice(`Finalisasi ${formatCurrency(amount)} berhasil. Sisa RAB ${formatCurrency(updatedRecord.rabTotal)}; nilai PA/kontrak ${formatCurrency(updatedRecord.contractValue)}.`)
+      return true
+    } catch (error) {
+      setNotice(`Finalisasi tidak tersimpan: ${error.message}`)
+      return false
+    }
+  }
+
   async function receiveFile(file) {
     if (!file) return
     setImportError('')
@@ -215,6 +258,17 @@ function App() {
   async function confirmImport() {
     if (!pendingImport?.records.length) return
     await saveRecords(pendingImport.records, `${pendingImport.records.length} baris RAB berhasil diimpor.`)
+    const mergeImported = (current, imported) => {
+      const manualRows = current.filter((row) => !row.importedFrom)
+      const mergedImported = new Map(imported.map((row) => [row.id, row]))
+      return [...manualRows, ...mergedImported.values()]
+    }
+    if (pendingImport.materials?.length) {
+      await saveWorkflowCollection('materials', mergeImported(workflowCollections.materials, pendingImport.materials), 'Master material diperbarui.')
+    }
+    if (pendingImport.activityCatalog?.length) {
+      await saveWorkflowCollection('activityCatalog', mergeImported(workflowCollections.activityCatalog, pendingImport.activityCatalog), 'Database kegiatan diperbarui.')
+    }
     setImportModal(false)
     setPendingImport(null)
     setActiveView('data')
@@ -239,8 +293,8 @@ function App() {
   }
 
   const pageTitle = {
-    overview: 'Dashboard', data: 'Rekap RAB', materials: 'Input Material', components: 'RAB Komponen',
-    activities: 'RAB Kegiatan', materialRecap: 'Rekap Material', realizations: 'Realisasi',
+    overview: 'Dashboard', data: 'Rekap RAB', materials: 'Input Material', activityCatalog: 'Master Kegiatan', components: 'RAB Komponen',
+    activities: 'RAB Kegiatan', paFinalization: 'Finalisasi ke PA', materialRecap: 'Rekap Material', realizations: 'Realisasi',
   }[activeView] || 'Dashboard'
 
   return (
@@ -320,7 +374,7 @@ function App() {
             <section className="page-heading data-heading"><div><p className="eyebrow">PORTOFOLIO ANGGARAN</p><h1>Data anggaran</h1><p className="heading-subtitle">Kelola rekap RAB dan lengkapi nilai kontrak secara manual.</p></div><button className="button button-primary" onClick={() => { setImportModal(true); setImportError(''); setPendingImport(null) }}><Upload size={16} /><span>Impor data</span></button></section>
             <ProjectTable records={filteredRecords} onEdit={setEditingRecord} onViewAll={() => setActiveView('data')} searchTerm={searchTerm} setSearchTerm={setSearchTerm} selectedYear={selectedYear} setSelectedYear={setSelectedYear} years={years} selectedProgram={selectedProgram} setSelectedProgram={setSelectedProgram} programs={programs} />
             <div className="table-footnote"><ShieldCheck size={14} /> Aplikasi ini untuk rekap dan monitoring. Proses tender dan kontrak dilakukan di luar aplikasi.</div>
-          </> : <RabWorkflow view={activeView} collections={workflowCollections} programRecords={records} onSave={saveWorkflowCollection} />}
+          </> : <RabWorkflow key={activeView} view={activeView} collections={workflowCollections} programRecords={records} onSave={saveWorkflowCollection} onTransfer={transferToPA} />}
           <footer className="page-footer"><span>PLN <span className="footer-separator">/</span> RAB &amp; Realisasi</span><span>Data tersimpan {connection === 'cloud' ? 'di Google Sheets' : 'di browser ini'}</span></footer>
         </div>
       </main>
@@ -329,7 +383,7 @@ function App() {
         <div className="modal-heading"><div><p className="eyebrow">IMPOR DATA</p><h2 id="import-title">Unggah workbook Excel</h2><p>Pilih file DATA APLIKASI.xlsx atau file dengan kolom rekap A-Z.</p></div><button className="icon-button" aria-label="Tutup" onClick={() => setImportModal(false)}><X size={19} /></button></div>
         <button className={`upload-zone ${pendingImport ? 'has-file' : ''}`} onClick={() => fileInput.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); receiveFile(event.dataTransfer.files[0]) }}><input ref={fileInput} type="file" accept=".xlsx" hidden onChange={(event) => { receiveFile(event.target.files[0]); event.target.value = '' }} /><div className="upload-icon">{pendingImport ? <Check size={20} /> : <Upload size={20} />}</div><strong>{pendingImport ? pendingImport.fileName : 'Klik untuk memilih file'}</strong><span>{pendingImport ? `Sheet: ${pendingImport.sheetName}` : 'atau tarik file Excel ke area ini (.xlsx)'}</span></button>
         {importError && <div className="inline-error"><CircleAlert size={16} />{importError}</div>}
-        {pendingImport && <div className="import-preview"><div><span>Baris terbaca</span><strong>{pendingImport.records.length}</strong></div><div><span>Sheet sumber</span><strong>{pendingImport.sheetName}</strong></div><p>Kolom kontrak tetap dapat diperbarui manual setelah data diimpor.</p></div>}
+        {pendingImport && <div className="import-preview"><div><span>Data rekap/PRK</span><strong>{pendingImport.records.length} baris</strong></div><div><span>Sheet rekap</span><strong>{pendingImport.sheetName}</strong></div><div><span>Master material</span><strong>{pendingImport.materials?.length || 0} item</strong></div><div><span>Database kegiatan</span><strong>{pendingImport.activityCatalog?.length || 0} kegiatan</strong></div><p>Data material dan kegiatan dari workbook akan digabung dengan master manual yang sudah ada.</p></div>}
         <div className="modal-actions"><button className="button button-secondary" onClick={() => setImportModal(false)}>Batal</button><button className="button button-primary" disabled={!pendingImport?.records.length} onClick={confirmImport}><ArrowUpFromLine size={16} /><span>Impor {pendingImport ? `${pendingImport.records.length} data` : 'data'}</span></button></div>
       </section></div>}
 
