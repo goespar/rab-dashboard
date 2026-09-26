@@ -1,14 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowDownToLine, ArrowUpFromLine, BarChart3, Check, ChevronDown, CircleAlert,
-  Cloud, FileSpreadsheet, FolderKanban, LayoutDashboard, Menu, Pencil, Plus,
-  Search, Settings2, ShieldCheck, Upload, X,
+  Activity, ArrowDownToLine, ArrowUpFromLine, BarChart3, Boxes, Check, ChevronDown,
+  CircleAlert, ClipboardList, Cloud, FileSpreadsheet, FolderKanban, LayoutDashboard,
+  Menu, Pencil, Plus, Search, Settings2, ShieldCheck, Upload, Wrench, X, Zap,
 } from 'lucide-react'
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { exportWorkbook, formatCurrency, importWorkbook, sampleRecords } from './lib/workbook.js'
+import RabWorkflow from './RabWorkflow.jsx'
 import './App.css'
+import './pln-theme.css'
 
 const STORAGE_KEY = 'rab-monitor-records-v1'
+const WORKFLOW_STORAGE_KEY = 'rab-monitor-workflow-v1'
+const EMPTY_COLLECTIONS = { materials: [], components: [], activities: [], materialRecap: [], realizations: [] }
+const WORKFLOW_NAV = [
+  { id: 'materials', label: 'Input Material', icon: Boxes, section: 'PERENCANAAN RAB' },
+  { id: 'components', label: 'RAB Komponen', icon: Wrench },
+  { id: 'activities', label: 'RAB Kegiatan', icon: ClipboardList },
+  { id: 'materialRecap', label: 'Rekap Material', icon: Boxes, section: 'REALISASI & REKAP' },
+  { id: 'realizations', label: 'Realisasi', icon: Activity },
+]
 
 function App() {
   const [records, setRecords] = useState(() => {
@@ -17,6 +28,13 @@ function App() {
       return cached ? JSON.parse(cached) : sampleRecords
     } catch {
       return sampleRecords
+    }
+  })
+  const [workflowCollections, setWorkflowCollections] = useState(() => {
+    try {
+      return { ...EMPTY_COLLECTIONS, ...JSON.parse(window.localStorage.getItem(WORKFLOW_STORAGE_KEY) || '{}') }
+    } catch {
+      return EMPTY_COLLECTIONS
     }
   })
   const [activeView, setActiveView] = useState('overview')
@@ -43,6 +61,20 @@ function App() {
           window.localStorage.setItem(STORAGE_KEY, JSON.stringify(result.records))
         }
         setConnection('cloud')
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/apps-script?action=loadWorkflow')
+      .then((response) => response.json())
+      .then((result) => {
+        if (cancelled || !result.ok || !result.collections) return
+        const nextCollections = { ...EMPTY_COLLECTIONS, ...result.collections }
+        setWorkflowCollections(nextCollections)
+        window.localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(nextCollections))
       })
       .catch(() => {})
     return () => { cancelled = true }
@@ -85,6 +117,27 @@ function App() {
     }, {})
     return Object.values(groups).sort((a, b) => b.pagu - a.pagu).slice(0, 5)
   }, [dashboardRecords])
+  const workflowSummary = useMemo(() => {
+    const components = workflowCollections.components || []
+    const activities = workflowCollections.activities || []
+    const realizations = workflowCollections.realizations || []
+    const totals = activities.reduce((sum, activity) => {
+      const activityComponents = components.filter((component) => component.criteria === activity.criteria
+        && component.activity.trim().toLowerCase() === activity.name.trim().toLowerCase())
+      const unitCost = activityComponents.reduce((cost, component) => cost
+        + Number(component.quantityPerUnit || 0) * (Number(component.materialPrice || 0) + Number(component.servicePrice || 0)), 0)
+      return { ...sum, rab: sum.rab + unitCost * Number(activity.volume || 0) }
+    }, { rab: 0 })
+    return {
+      rab: totals.rab,
+      activities: activities.length,
+      tm: activities.filter((activity) => activity.criteria === 'TM').length,
+      tr: activities.filter((activity) => activity.criteria === 'TR').length,
+      realizedVolume: realizations.reduce((sum, item) => sum + Number(item.volume || 0), 0),
+      billed: realizations.reduce((sum, item) => sum + Number(item.billed || 0), 0),
+      paid: realizations.reduce((sum, item) => sum + Number(item.paid || 0), 0),
+    }
+  }, [workflowCollections])
 
   async function saveRecords(nextRecords, successMessage) {
     setRecords(nextRecords)
@@ -97,6 +150,48 @@ function App() {
       })
       const result = await response.json()
       if (!response.ok || !result.ok) throw new Error(result.error || 'Penyimpanan cloud gagal.')
+      setConnection('cloud')
+      setNotice(`${successMessage} Tersimpan di Google Sheets.`)
+    } catch {
+      setConnection('local')
+      setNotice(`${successMessage} Tersimpan di browser ini.`)
+    }
+  }
+
+  async function saveWorkflowCollection(collection, nextRecords, successMessage) {
+    const nextCollections = { ...workflowCollections, [collection]: nextRecords }
+    setWorkflowCollections(nextCollections)
+    window.localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(nextCollections))
+    if (collection === 'activities' || collection === 'components') {
+      const activitiesForTotals = collection === 'activities' ? nextRecords : workflowCollections.activities
+      const componentsForTotals = collection === 'components' ? nextRecords : workflowCollections.components
+      const affectedPrks = new Set([
+        ...workflowCollections.activities.map((activity) => activity.prk).filter(Boolean),
+        ...activitiesForTotals.map((activity) => activity.prk).filter(Boolean),
+      ])
+      const totalsByPrk = new Map()
+      activitiesForTotals.forEach((activity) => {
+        const matchingComponents = componentsForTotals.filter((component) => component.criteria === activity.criteria
+          && component.activity.trim().toLowerCase() === activity.name.trim().toLowerCase())
+        const unitCost = matchingComponents.reduce((sum, component) => sum
+          + Number(component.quantityPerUnit || 0) * (Number(component.materialPrice || 0) + Number(component.servicePrice || 0)), 0)
+        totalsByPrk.set(activity.prk, (totalsByPrk.get(activity.prk) || 0) + unitCost * Number(activity.volume || 0))
+      })
+      const updatedProgramRecords = records.map((record) => affectedPrks.has(record.prk)
+        ? { ...record, rabTotal: totalsByPrk.get(record.prk) || 0 }
+        : record)
+      if (updatedProgramRecords.some((record, index) => record !== records[index])) {
+        await saveRecords(updatedProgramRecords, 'Total RAB per PRK diperbarui.')
+      }
+    }
+    try {
+      const response = await fetch('/api/apps-script', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'saveWorkflow', collection, records: nextRecords }),
+      })
+      const result = await response.json()
+      if (!response.ok || !result.ok) throw new Error(result.error || 'Penyimpanan Google Sheets gagal.')
       setConnection('cloud')
       setNotice(`${successMessage} Tersimpan di Google Sheets.`)
     } catch {
@@ -143,31 +238,41 @@ function App() {
     setNotice('File Excel berhasil disiapkan.')
   }
 
-  const pageTitle = activeView === 'overview' ? 'Ringkasan RAB' : 'Data Anggaran'
+  const pageTitle = {
+    overview: 'Dashboard', data: 'Rekap RAB', materials: 'Input Material', components: 'RAB Komponen',
+    activities: 'RAB Kegiatan', materialRecap: 'Rekap Material', realizations: 'Realisasi',
+  }[activeView] || 'Dashboard'
 
   return (
     <div className="app-shell min-h-screen">
       <aside className={`sidebar ${sidebarOpen ? 'sidebar-open' : ''}`}>
         <div className="brand-lockup">
-          <div className="brand-mark"><BarChart3 size={20} strokeWidth={2.4} /></div>
-          <div><strong>RAB Monitor</strong><span>PLANNING OFFICE</span></div>
+          <div className="brand-mark"><Zap size={21} strokeWidth={2.5} /></div>
+          <div><strong>MONITORING</strong><span>RAB &amp; REALISASI</span></div>
           <button className="icon-button sidebar-close" aria-label="Tutup menu" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
-        <div className="workspace-label">WORKSPACE</div>
+        <div className="workspace-label">RAB &amp; MONITORING</div>
         <nav className="side-nav" aria-label="Navigasi utama">
-          <button className={activeView === 'overview' ? 'nav-item active' : 'nav-item'} onClick={() => { setActiveView('overview'); setSidebarOpen(false) }}><LayoutDashboard size={18} /><span>Ringkasan</span></button>
-          <button className={activeView === 'data' ? 'nav-item active' : 'nav-item'} onClick={() => { setActiveView('data'); setSidebarOpen(false) }}><FolderKanban size={18} /><span>Data anggaran</span><span className="nav-count">{records.length}</span></button>
+          <button className={activeView === 'overview' ? 'nav-item active' : 'nav-item'} onClick={() => { setActiveView('overview'); setSidebarOpen(false) }}><LayoutDashboard size={18} /><span>Dashboard</span></button>
+          {WORKFLOW_NAV.map((item) => {
+            const Icon = item.icon
+            return <div className="nav-group" key={item.id}>
+              {item.section && <div className="nav-section-label">{item.section}</div>}
+              <button className={activeView === item.id ? 'nav-item active' : 'nav-item'} onClick={() => { setActiveView(item.id); setSidebarOpen(false) }}><Icon size={18} /><span>{item.label}</span><span className="nav-count">{workflowCollections[item.id]?.length || 0}</span></button>
+            </div>
+          })}
+          <button className={activeView === 'data' ? 'nav-item active' : 'nav-item'} onClick={() => { setActiveView('data'); setSidebarOpen(false) }}><FolderKanban size={18} /><span>Rekap RAB</span><span className="nav-count">{records.length}</span></button>
         </nav>
         <div className="sidebar-spacer" />
-        <div className="sidebar-note"><div className="note-icon"><ShieldCheck size={16} /></div><div><strong>Rekap internal</strong><span>Di luar proses tender & kontrak</span></div></div>
-        <div className="profile-row"><div className="profile-avatar">RB</div><div className="profile-copy"><strong>Pengelola RAB</strong><span>Unit kerja</span></div><Settings2 size={17} className="profile-settings" /></div>
+        <div className="sidebar-note"><div className="note-icon"><ShieldCheck size={16} /></div><div><strong>Monitoring RAB</strong><span>Rekap anggaran dan realisasi</span></div></div>
+        <div className="profile-row"><div className="profile-avatar">PLN</div><div className="profile-copy"><strong>Pengelola RAB</strong><span>PLN Indonesia</span></div><Settings2 size={17} className="profile-settings" /></div>
       </aside>
       {sidebarOpen && <button className="sidebar-scrim" aria-label="Tutup menu" onClick={() => setSidebarOpen(false)} />}
 
       <main className="main-content">
         <header className="topbar">
           <button className="icon-button mobile-menu" aria-label="Buka menu" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
-          <div className="breadcrumb"><span>Rencana anggaran</span><span className="breadcrumb-slash">/</span><strong>{pageTitle}</strong></div>
+          <div className="breadcrumb"><span>Monitoring PLN</span><span className="breadcrumb-slash">/</span><strong>{pageTitle}</strong></div>
           <div className="topbar-actions">
             <div className={`sync-status ${connection === 'cloud' ? 'is-cloud' : ''}`} title={connection === 'cloud' ? 'Google Sheets tersambung' : 'Penyimpanan browser'}>{connection === 'cloud' ? <Cloud size={15} /> : <CircleAlert size={15} />}<span>{connection === 'cloud' ? 'Google Sheets' : 'Lokal'}</span></div>
             <button className="button button-secondary export-button" onClick={downloadWorkbook}><ArrowDownToLine size={16} /><span>Ekspor</span></button>
@@ -177,7 +282,7 @@ function App() {
 
         <div className="page-content">
           {activeView === 'overview' ? <>
-            <section className="page-heading"><div><p className="eyebrow">MONITORING PORTOFOLIO</p><h1>Ringkasan RAB</h1><p className="heading-subtitle">Pantau pagu, rencana anggaran, dan realisasi per program.</p></div>
+            <section className="page-heading"><div><p className="eyebrow">DASHBOARD RAB</p><h1>Dashboard</h1><p className="heading-subtitle">Rekap anggaran investasi dan realisasi per program.</p></div>
               <div className="filter-pair"><label className="select-wrap"><span className="sr-only">Filter tahun</span><select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}><option value="all">Semua tahun</option>{years.map((year) => <option key={year} value={String(year)}>{year}</option>)}</select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter program</span><select value={selectedProgram} onChange={(event) => setSelectedProgram(event.target.value)}><option value="all">Semua program</option>{programs.map((program) => <option key={program} value={program}>{program}</option>)}</select><ChevronDown size={15} /></label></div>
             </section>
 
@@ -188,9 +293,19 @@ function App() {
               <article className="metric-card"><div className="metric-top"><span>Total dibayar</span><span className="metric-icon mint-icon"><Check size={17} /></span></div><strong>{formatCurrency(totals.paid)}</strong><div className="metric-foot">Tagihan tercatat {formatCurrency(totals.billed)}</div></article>
             </section>
 
+            <section className="workflow-overview panel" aria-label="Ringkasan input RAB dan realisasi">
+              <div className="workflow-overview-heading"><div><p className="eyebrow">ALUR INPUT RAB</p><h2>RAB sampai realisasi</h2></div><button className="text-action" onClick={() => setActiveView('materials')}>Buka alur <span aria-hidden="true">-&gt;</span></button></div>
+              <div className="workflow-overview-grid">
+                <div><span>Kegiatan RAB</span><strong>{workflowSummary.activities}</strong><small>TM {workflowSummary.tm} <i /> TR {workflowSummary.tr}</small></div>
+                <div><span>Nilai RAB input</span><strong>{formatCurrency(workflowSummary.rab)}</strong><small>Hasil komponen pekerjaan</small></div>
+                <div><span>Volume realisasi</span><strong>{workflowSummary.realizedVolume}</strong><small>Total volume tercatat</small></div>
+                <div><span>Dibayar dari realisasi</span><strong>{formatCurrency(workflowSummary.paid)}</strong><small>Tagihan {formatCurrency(workflowSummary.billed)}</small></div>
+              </div>
+            </section>
+
             <section className="analytics-grid">
               <article className="panel chart-panel"><div className="panel-heading"><div><p className="eyebrow">ALOKASI ANGGARAN</p><h2>Pagu dan nilai kontrak</h2></div><div className="legend"><span><i className="legend-swatch pagu-swatch" />Pagu</span><span><i className="legend-swatch contract-swatch" />Kontrak</span></div></div>
-                <div className="chart-frame">{chartData.length ? <ResponsiveContainer width="100%" height="100%"><BarChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}><XAxis dataKey="program" axisLine={false} tickLine={false} tick={{ fill: '#778076', fontSize: 11 }} tickFormatter={(value) => value.length > 12 ? `${value.slice(0, 12)}...` : value} /><YAxis axisLine={false} tickLine={false} tick={{ fill: '#899088', fontSize: 10 }} tickFormatter={(value) => value >= 1000000000 ? `${(value / 1000000000).toFixed(1)} M` : `${Math.round(value / 1000000)} jt`} width={55} /><Tooltip formatter={(value) => formatCurrency(value)} cursor={{ fill: '#f4f6f0' }} contentStyle={{ border: '1px solid #e4e8e0', borderRadius: 5, fontSize: 12 }} /><Bar dataKey="pagu" name="Pagu" fill="#315f49" radius={[3, 3, 0, 0]} maxBarSize={30} /><Bar dataKey="kontrak" name="Kontrak" fill="#dceba7" radius={[3, 3, 0, 0]} maxBarSize={30} /></BarChart></ResponsiveContainer> : <div className="empty-chart">Belum ada data anggaran untuk ditampilkan.</div>}</div>
+                <div className="chart-frame">{chartData.length ? <ResponsiveContainer width="100%" height="100%"><BarChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}><XAxis dataKey="program" axisLine={false} tickLine={false} tick={{ fill: '#778398', fontSize: 11 }} tickFormatter={(value) => value.length > 12 ? `${value.slice(0, 12)}...` : value} /><YAxis axisLine={false} tickLine={false} tick={{ fill: '#8994a8', fontSize: 10 }} tickFormatter={(value) => value >= 1000000000 ? `${(value / 1000000000).toFixed(1)} M` : `${Math.round(value / 1000000)} jt`} width={55} /><Tooltip formatter={(value) => formatCurrency(value)} cursor={{ fill: '#f0f7fb' }} contentStyle={{ border: '1px solid #dce7f0', borderRadius: 5, fontSize: 12 }} /><Bar dataKey="pagu" name="Pagu" fill="#0878b9" radius={[3, 3, 0, 0]} maxBarSize={30} /><Bar dataKey="kontrak" name="Kontrak" fill="#24bfd3" radius={[3, 3, 0, 0]} maxBarSize={30} /></BarChart></ResponsiveContainer> : <div className="empty-chart">Belum ada data anggaran untuk ditampilkan.</div>}</div>
                 <div className="chart-caption"><span>Menampilkan hingga 5 kelompok program.</span><span className="chart-period"><span className="period-dot" /> Data aktif</span></div>
               </article>
               <article className="panel status-panel"><div className="panel-heading"><div><p className="eyebrow">KELENGKAPAN DATA</p><h2>Kontrol administrasi</h2></div><span className="status-icon"><ShieldCheck size={17} /></span></div>
@@ -201,12 +316,12 @@ function App() {
               </article>
             </section>
             <ProjectTable records={filteredRecords.slice(0, 6)} onEdit={setEditingRecord} onViewAll={() => setActiveView('data')} compact />
-          </> : <>
+          </> : activeView === 'data' ? <>
             <section className="page-heading data-heading"><div><p className="eyebrow">PORTOFOLIO ANGGARAN</p><h1>Data anggaran</h1><p className="heading-subtitle">Kelola rekap RAB dan lengkapi nilai kontrak secara manual.</p></div><button className="button button-primary" onClick={() => { setImportModal(true); setImportError(''); setPendingImport(null) }}><Upload size={16} /><span>Impor data</span></button></section>
             <ProjectTable records={filteredRecords} onEdit={setEditingRecord} onViewAll={() => setActiveView('data')} searchTerm={searchTerm} setSearchTerm={setSearchTerm} selectedYear={selectedYear} setSelectedYear={setSelectedYear} years={years} selectedProgram={selectedProgram} setSelectedProgram={setSelectedProgram} programs={programs} />
             <div className="table-footnote"><ShieldCheck size={14} /> Aplikasi ini untuk rekap dan monitoring. Proses tender dan kontrak dilakukan di luar aplikasi.</div>
-          </>}
-          <footer className="page-footer"><span>RAB Monitor <span className="footer-separator">/</span> Rekap anggaran</span><span>Data tersimpan {connection === 'cloud' ? 'di Google Sheets' : 'di browser ini'}</span></footer>
+          </> : <RabWorkflow view={activeView} collections={workflowCollections} programRecords={records} onSave={saveWorkflowCollection} />}
+          <footer className="page-footer"><span>PLN <span className="footer-separator">/</span> RAB &amp; Realisasi</span><span>Data tersimpan {connection === 'cloud' ? 'di Google Sheets' : 'di browser ini'}</span></footer>
         </div>
       </main>
 
