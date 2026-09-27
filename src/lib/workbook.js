@@ -87,6 +87,7 @@ function normalizeRecord(row, headerRow, sheetName, rowIndex) {
   })
   record.id = `${normalizedHeader(sheetName)}-row-${rowIndex + 1}`
   record.program = record.program || 'Lainnya'
+  record.prkRemaining = (record.totalFinal || 0) - (record.rabTotal || 0) - (record.paTotal || 0)
   return record
 }
 

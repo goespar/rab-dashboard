@@ -43,6 +43,19 @@ test('imports thousands-separated financial values without converting them to ze
   ])
 })
 
+test('calculates remaining PRK from total final, RAB, and PA when importing', async () => {
+  const workbook = new ExcelJS.Workbook()
+  const sheet = workbook.addWorksheet('DATA ANGGARAN INVESTASI')
+  sheet.addRow(['NO.PRK', 'URAIAN', 'TOTAL AKHIR', 'TOTAL RAB', 'TOTAL PA', 'SISA PRK', 'NILAI KONTRAK'])
+  sheet.addRow(['PRK-1', 'Paket A', 1000, 300, 200, 9999, 0])
+  const buffer = await workbook.xlsx.writeBuffer()
+  const result = await importWorkbook({
+    arrayBuffer: async () => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+  })
+
+  assert.equal(result.records[0].prkRemaining, 500)
+})
+
 test('transfers PA against the matching row ID and rejects overspending', async () => {
   class MockSheet {
     constructor(values = []) {
@@ -65,7 +78,10 @@ test('transfers PA against the matching row ID and rejects overspending', async 
     getRange(row, column) {
       return {
         setValue: (value) => { this.values[row - 1][column - 1] = value },
-        setValues: (rows) => rows.forEach((values, index) => { this.values[row - 1 + index] = values }),
+        setValues: (rows) => rows.forEach((values, rowIndex) => {
+          this.values[row - 1 + rowIndex] ??= []
+          values.forEach((value, columnIndex) => { this.values[row - 1 + rowIndex][column - 1 + columnIndex] = value })
+        }),
       }
     }
 
@@ -79,8 +95,8 @@ test('transfers PA against the matching row ID and rejects overspending', async 
     }
   }
 
-  const headers = ['NO.PRK', 'NO.RAB', 'URAIAN', 'TOTAL RAB', 'TOTAL PA', 'NILAI KONTRAK', 'RECORD ID']
-  const dataSheet = new MockSheet([headers, ['', 'RAB-42', 'Paket A', 1000, 200, 200, 'DATAANGGARANINVESTASI-row-2']])
+  const headers = ['NO.PRK', 'NO.RAB', 'URAIAN', 'TOTAL AKHIR', 'TOTAL RAB', 'TOTAL PA', 'NILAI KONTRAK', 'SISA PRK', 'RECORD ID']
+  const dataSheet = new MockSheet([headers, ['', 'RAB-42', 'Paket A', 1500, 1000, 200, 200, 300, 'DATAANGGARANINVESTASI-row-2']])
   const sheets = { RABData: dataSheet }
   const spreadsheet = {
     getSheetByName: (name) => sheets[name] || null,
@@ -108,8 +124,10 @@ test('transfers PA against the matching row ID and rejects overspending', async 
   assert.equal(result.record.rabTotal, 700)
   assert.equal(result.record.paTotal, 500)
   assert.equal(result.record.contractValue, 500)
+  assert.equal(result.record.prkRemaining, 300)
   assert.equal(result.transfer.contractValue, 500)
   assert.equal(dataValue('NILAI KONTRAK'), 500)
+  assert.equal(dataValue('SISA PRK'), 300)
   const transferHeaders = sheets.PA_TRANSFERS.values[0]
   assert.equal(sheets.PA_TRANSFERS.values.length, 2)
   assert.equal(transferHeaders.includes('DATA_JSON'), false)
@@ -119,6 +137,7 @@ test('transfers PA against the matching row ID and rejects overspending', async 
   assert.equal(rejected.ok, false)
   assert.equal(dataValue('TOTAL RAB'), 700)
   assert.equal(dataValue('TOTAL PA'), 500)
+  assert.equal(dataValue('SISA PRK'), 300)
   assert.equal(sheets.PA_TRANSFERS.values.length, 2)
 
   const saved = post({ action: 'save', records: [result.record] })
@@ -131,6 +150,7 @@ test('transfers PA against the matching row ID and rejects overspending', async 
   assert.equal(dataValue('TOTAL RAB'), 600)
   assert.equal(dataValue('TOTAL PA'), 600)
   assert.equal(dataValue('NILAI KONTRAK'), 600)
+  assert.equal(dataValue('SISA PRK'), 300)
 
   const blocked = post({ action: 'cancelTransferToPA', transferId: result.transfer.id })
   assert.equal(blocked.ok, false)
@@ -142,6 +162,7 @@ test('transfers PA against the matching row ID and rejects overspending', async 
   assert.equal(canceledLater.record.rabTotal, 700)
   assert.equal(canceledLater.record.paTotal, 500)
   assert.equal(canceledLater.record.contractValue, 500)
+  assert.equal(canceledLater.record.prkRemaining, 300)
   assert.equal(sheets.PA_TRANSFERS.values.length, 2)
 
   const canceledFirst = post({ action: 'cancelTransferToPA', transferId: result.transfer.id })
@@ -152,6 +173,7 @@ test('transfers PA against the matching row ID and rejects overspending', async 
   assert.equal(dataValue('TOTAL RAB'), 1000)
   assert.equal(dataValue('TOTAL PA'), 200)
   assert.equal(dataValue('NILAI KONTRAK'), 200)
+  assert.equal(dataValue('SISA PRK'), 300)
   assert.equal(sheets.PA_TRANSFERS.values.length, 1)
 })
 
@@ -332,7 +354,10 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
     getRange(row, column) {
       return {
         setValue: (value) => { this.values[row - 1][column - 1] = value },
-        setValues: (rows) => rows.forEach((values, index) => { this.values[row - 1 + index] = values }),
+        setValues: (rows) => rows.forEach((values, rowIndex) => {
+          this.values[row - 1 + rowIndex] ??= []
+          values.forEach((value, columnIndex) => { this.values[row - 1 + rowIndex][column - 1 + columnIndex] = value })
+        }),
       }
     }
     appendRow(row) { this.values.push(row) }
@@ -380,12 +405,14 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
   assert.equal(publicResponse.summary.groups[0].pagu, 1000)
   assert.equal(publicResponse.summary.groups[0].rab, 500)
   assert.equal(publicResponse.summary.groups[0].contract, 250)
-  assert.equal(publicResponse.summary.groups[0].remainingPrk, 450)
+  assert.equal(publicResponse.summary.groups[0].remainingPrk, 250)
   assert.equal(publicResponse.summary.groups[0].paid, 50)
   assert.equal(publicResponse.summary.rows.length, 2)
   assert.equal(publicResponse.summary.groups.find((group) => group.program === 'Program A').pagu, 1000)
   assert.equal(publicResponse.summary.rows[0].prk, 'PRK-SECRET')
   assert.equal(publicResponse.summary.rows[0].description, 'Uraian rahasia')
+  assert.equal(publicResponse.summary.rows[0].prkRemaining, 250)
+  assert.equal(dataSheet.values[1][headers.indexOf('SISA PRK')], 250)
   assert.equal('vendor' in publicResponse.summary.rows[0], false)
   assert.equal('contractNumber' in publicResponse.summary.rows[0], false)
   assert.equal('records' in publicResponse, false)
@@ -399,8 +426,11 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
   assert.equal(admin.ok, true, admin.error)
   assert.equal(admin.user.role, 'admin')
   assert.equal(properties.has('ADMIN_SETUP_KEY'), false)
+  dataSheet.values[1][headers.indexOf('SISA PRK')] = 9999
   const privateData = JSON.parse(context.doGet({ parameter: { action: 'load', token: admin.token } }).text)
   assert.equal(privateData.records[0].prk, 'PRK-SECRET')
+  assert.equal(privateData.records[0].prkRemaining, 250)
+  assert.equal(dataSheet.values[1][headers.indexOf('SISA PRK')], 250)
 
   const viewer = post({ action: 'saveUser', token: admin.token, user: { username: 'viewer', name: 'Viewer', role: 'viewer', password: 'password-viewer-123', active: true } })
   assert.equal(viewer.ok, true, viewer.error)

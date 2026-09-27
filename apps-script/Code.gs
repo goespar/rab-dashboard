@@ -74,6 +74,7 @@ function doGet(event) {
   if (!authorization.ok) return json_({ ok: false, error: authorization.error, code: 'AUTH_REQUIRED' })
   if (action === 'loadWorkflow') return json_({ ok: true, collections: loadWorkflow_(), user: authorization.user })
   const sheet = getDataSheet_()
+  syncPrkRemainingColumn_(sheet)
   const values = sheet.getDataRange().getValues()
   const headers = values.shift() || []
   const records = values.filter((row) => row.some((cell) => cell !== '')).map((row, index) => {
@@ -132,7 +133,11 @@ function doPost(event) {
   lock.waitLock(10000)
   try {
     const sheet = getDataSheet_()
-    const rows = payload.records.map((record) => DATA_HEADERS.map((header) => record[CLIENT_KEYS[header]] ?? ''))
+    const rows = payload.records.map((record) => {
+      const current = { ...record }
+      current.prkRemaining = calculatePrkRemaining_(current)
+      return DATA_HEADERS.map((header) => current[CLIENT_KEYS[header]] ?? '')
+    })
     sheet.clearContents()
     sheet.getRange(1, 1, 1, DATA_HEADERS.length).setValues([DATA_HEADERS])
     if (rows.length) sheet.getRange(2, 1, rows.length, DATA_HEADERS.length).setValues(rows)
@@ -156,7 +161,29 @@ function toClientRecord_(row) {
   const result = {}
   Object.keys(CLIENT_KEYS).forEach((header) => { result[CLIENT_KEYS[header]] = row[header] })
   result.id = result.id || `row-${row.sourceRow}`
+  result.prkRemaining = calculatePrkRemaining_(result)
   return result
+}
+
+function calculatePrkRemaining_(record) {
+  return (Number(record.totalFinal) || 0) - (Number(record.rabTotal) || 0) - (Number(record.paTotal) || 0)
+}
+
+function syncPrkRemainingColumn_(sheet) {
+  const values = sheet.getDataRange().getValues()
+  if (values.length < 2) return
+  const headers = values[0]
+  const totalFinalIndex = headers.indexOf('TOTAL AKHIR')
+  const rabIndex = headers.indexOf('TOTAL RAB')
+  const paIndex = headers.indexOf('TOTAL PA')
+  const remainingIndex = headers.indexOf('SISA PRK')
+  if (totalFinalIndex < 0 || rabIndex < 0 || paIndex < 0 || remainingIndex < 0) return
+
+  const remainingValues = values.slice(1).map((row) => {
+    if (!row.some((cell) => cell !== '' && cell !== null)) return ['']
+    return [(Number(row[totalFinalIndex]) || 0) - (Number(row[rabIndex]) || 0) - (Number(row[paIndex]) || 0)]
+  })
+  sheet.getRange(2, remainingIndex + 1, remainingValues.length, 1).setValues(remainingValues)
 }
 
 function json_(value) {
@@ -304,6 +331,7 @@ function saveUser_(payload) {
 
 function publicDashboard_() {
   const sheet = getDataSheet_()
+  syncPrkRemainingColumn_(sheet)
   const values = sheet.getDataRange().getValues()
   const headers = values.shift() || []
   const column = (name) => headers.indexOf(name)
@@ -321,7 +349,8 @@ function publicDashboard_() {
       program: String(value(indexes.program) || 'Program lain'), year: String(value(indexes.year) || ''),
       notes: String(value(indexes.notes) || ''), totalFinal: number(indexes.pagu), totalPrk: number(indexes.totalPrk),
       rabTotal: number(indexes.rab), paTotal: number(indexes.pa), contractValue: number(indexes.contract),
-      billed: number(indexes.billed), paid: number(indexes.paid), prkRemaining: number(indexes.remainingPrk),
+      billed: number(indexes.billed), paid: number(indexes.paid),
+      prkRemaining: number(indexes.pagu) - number(indexes.rab) - number(indexes.pa),
     }
   }).filter((record) => record.prk.trim())
   rows.forEach((record) => {
@@ -513,7 +542,8 @@ function transferToPA_(payload) {
     const rabIndex = headers.indexOf('TOTAL RAB')
     const paIndex = headers.indexOf('TOTAL PA')
     const contractIndex = headers.indexOf('NILAI KONTRAK')
-    if (rabIndex < 0 || paIndex < 0 || contractIndex < 0) throw new Error('Kolom TOTAL RAB, TOTAL PA, atau NILAI KONTRAK tidak ditemukan.')
+    const remainingIndex = headers.indexOf('SISA PRK')
+    if (rabIndex < 0 || paIndex < 0 || contractIndex < 0 || remainingIndex < 0) throw new Error('Kolom TOTAL RAB, TOTAL PA, NILAI KONTRAK, atau SISA PRK tidak ditemukan.')
 
     let targetRow = -1
     let target = null
@@ -536,10 +566,12 @@ function transferToPA_(payload) {
     const nextRab = Math.max(0, previousRab - amount)
     const nextPA = previousPA + amount
     const previousContract = Number(target.contractValue) || 0
+    const nextRemaining = calculatePrkRemaining_({ ...target, rabTotal: nextRab, paTotal: nextPA })
     try {
       sheet.getRange(targetRow, rabIndex + 1).setValue(nextRab)
       sheet.getRange(targetRow, paIndex + 1).setValue(nextPA)
       sheet.getRange(targetRow, contractIndex + 1).setValue(nextPA)
+      sheet.getRange(targetRow, remainingIndex + 1).setValue(nextRemaining)
       const transfer = {
         id: Utilities.getUuid(), recordId: target.id, prk: target.prk, rabNumber: target.rabNumber,
         criteria: payload.criteria || '', description: target.description || '', date: payload.date || new Date().toISOString().slice(0, 10),
@@ -547,11 +579,12 @@ function transferToPA_(payload) {
         contractValue: nextPA, notes: String(payload.notes || '').trim(), createdAt: new Date().toISOString(),
       }
       appendWorkflowRecord_('paTransfers', transfer)
-      return { transfer, record: { ...target, rabTotal: nextRab, paTotal: nextPA, contractValue: nextPA } }
+      return { transfer, record: { ...target, rabTotal: nextRab, paTotal: nextPA, contractValue: nextPA, prkRemaining: nextRemaining } }
     } catch (error) {
       sheet.getRange(targetRow, rabIndex + 1).setValue(previousRab)
       sheet.getRange(targetRow, paIndex + 1).setValue(previousPA)
       sheet.getRange(targetRow, contractIndex + 1).setValue(previousContract)
+      sheet.getRange(targetRow, remainingIndex + 1).setValue(calculatePrkRemaining_(target))
       throw error
     }
   } finally {
@@ -581,7 +614,9 @@ function cancelTransferToPA_(payload) {
     const rabIndex = headers.indexOf('TOTAL RAB')
     const paIndex = headers.indexOf('TOTAL PA')
     const contractIndex = headers.indexOf('NILAI KONTRAK')
-    if (rabIndex < 0 || paIndex < 0 || contractIndex < 0) throw new Error('Kolom TOTAL RAB, TOTAL PA, atau NILAI KONTRAK tidak ditemukan.')
+    const totalFinalIndex = headers.indexOf('TOTAL AKHIR')
+    const remainingIndex = headers.indexOf('SISA PRK')
+    if (rabIndex < 0 || paIndex < 0 || contractIndex < 0 || totalFinalIndex < 0 || remainingIndex < 0) throw new Error('Kolom TOTAL RAB, TOTAL PA, TOTAL AKHIR, NILAI KONTRAK, atau SISA PRK tidak ditemukan.')
 
     const recordIdIndex = headers.indexOf('RECORD ID')
     const prkIndex = headers.indexOf('NO.PRK')
@@ -593,7 +628,11 @@ function cancelTransferToPA_(payload) {
       const matchesPrk = recordIdIndex < 0 && prkIndex >= 0 && String(row[prkIndex]) === String(transfer.prk)
       if (matchesId || matchesPrk) {
         dataRow = index + 2
-        current = { rab: Number(row[rabIndex]) || 0, pa: Number(row[paIndex]) || 0, contract: Number(row[contractIndex]) || 0 }
+        current = {
+          rab: Number(row[rabIndex]) || 0, pa: Number(row[paIndex]) || 0,
+          contract: Number(row[contractIndex]) || 0, totalFinal: Number(row[totalFinalIndex]) || 0,
+          remaining: Number(row[remainingIndex]) || 0,
+        }
       }
     })
     if (!current) throw new Error('PRK sumber transfer tidak ditemukan.')
@@ -608,6 +647,7 @@ function cancelTransferToPA_(payload) {
     const previousRab = Number(transfer.rabBefore)
     const previousPA = Number(transfer.paBefore)
     const previousContract = Number(transfer.contractBefore ?? transfer.paBefore)
+    const previousRemaining = current.totalFinal - previousRab - previousPA
     if (![previousRab, previousPA, previousContract].every(Number.isFinite)) {
       throw new Error('Data saldo sebelum transfer tidak lengkap, sehingga transfer tidak dapat dibatalkan otomatis.')
     }
@@ -622,17 +662,19 @@ function cancelTransferToPA_(payload) {
       sheet.getRange(dataRow, rabIndex + 1).setValue(previousRab)
       sheet.getRange(dataRow, paIndex + 1).setValue(previousPA)
       sheet.getRange(dataRow, contractIndex + 1).setValue(previousContract)
+      sheet.getRange(dataRow, remainingIndex + 1).setValue(previousRemaining)
       transferSheet.deleteRow(physicalIndex + 1)
     } catch (error) {
       sheet.getRange(dataRow, rabIndex + 1).setValue(current.rab)
       sheet.getRange(dataRow, paIndex + 1).setValue(current.pa)
       sheet.getRange(dataRow, contractIndex + 1).setValue(current.contract)
+      sheet.getRange(dataRow, remainingIndex + 1).setValue(current.remaining)
       throw error
     }
 
     return {
       transfer,
-      record: { id: transfer.recordId, prk: transfer.prk, rabTotal: previousRab, paTotal: previousPA, contractValue: previousContract },
+      record: { id: transfer.recordId, prk: transfer.prk, rabTotal: previousRab, paTotal: previousPA, contractValue: previousContract, prkRemaining: previousRemaining },
     }
   } finally {
     lock.releaseLock()
