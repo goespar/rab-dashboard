@@ -676,6 +676,10 @@ function PublicDashboard({ groups, rows, selectedYear, setSelectedYear, updatedA
       && (programFilter === 'all' || programCode(row.program) === programFilter)
       && (notesFilter === 'all' || notesCategory(row) === notesFilter)
   )
+  const summaryRows = rows.filter((row) =>
+    (selectedYear === 'all' || String(row.year) === selectedYear)
+      && (programFilter === 'all' || programCode(row.program) === programFilter)
+  )
   const totals = selectedGroups.reduce((sum, group) => ({
     count: sum.count + Number(group.publicCount || 0),
     pagu: sum.pagu + Number(group.totalFinal || group.totalPrk || 0),
@@ -685,6 +689,13 @@ function PublicDashboard({ groups, rows, selectedYear, setSelectedYear, updatedA
     paid: sum.paid + Number(group.paid || 0),
     remainingPrk: sum.remainingPrk + Number(group.prkRemaining || 0),
   }), { count: 0, pagu: 0, rab: 0, contract: 0, billed: 0, paid: 0, remainingPrk: 0 })
+  const notesTotals = summaryRows.reduce((sum, row) => {
+    const category = notesCategory(row)
+    if (category === 'Murni') sum.murni += Number(row.totalFinal || row.totalPrk || 0)
+    if (category === 'Lanjutan') sum.lanjutan += Number(row.totalFinal || row.totalPrk || 0)
+    return sum
+  }, { murni: 0, lanjutan: 0 })
+  const paguPercent = (value) => totals.pagu > 0 ? `${(value / totals.pagu * 100).toFixed(1)}%` : '0%'
   const latestYear = [...new Set(groups.map((group) => String(group.year || '')).filter(Boolean))].sort().at(-1)
   const titleYear = selectedYear === 'all' ? latestYear || new Date().getFullYear() : selectedYear
   const updatedLabel = updatedAt ? new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(updatedAt)) : '--:--'
@@ -693,12 +704,11 @@ function PublicDashboard({ groups, rows, selectedYear, setSelectedYear, updatedA
     <section className="public-dashboard-heading"><div><p className="eyebrow">RINGKASAN ANGGARAN INVESTASI</p><h1>DASHBOARD AI {titleYear}</h1><p>Ringkasan RAB, kontrak, dan pembayaran.</p></div><div className="public-dashboard-filters"><label className="select-wrap"><span className="sr-only">Filter program</span><select value={programFilter} onChange={(event) => setProgramFilter(event.target.value)}><option value="all">Semua program</option><option value="DAL">DAL</option><option value="EFI">EFI</option><option value="SAR">SAR</option></select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter tahun</span><select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}><option value="all">Semua tahun</option>{publicYears.map((year) => <option key={year} value={year}>{year}</option>)}</select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter keterangan</span><select value={notesFilter} onChange={(event) => setNotesFilter(event.target.value)}><option value="all">Semua keterangan</option><option value="Murni">Murni</option><option value="Lanjutan">Lanjutan</option></select><ChevronDown size={15} /></label></div></section>
 
     <section className="public-board-layout" aria-label="Ringkasan per program">
-      <aside className="public-annual-summary"><div className="public-annual-heading">RAB {titleYear}</div><strong>{formatCurrency(totals.pagu)}</strong><div className="public-summary-label">TOTAL PAGU</div>
-        <div className="public-summary-line"><span>RAB</span><strong>{formatCurrency(totals.rab)}</strong></div>
-        <div className="public-summary-line"><span>KONTRAK</span><strong>{formatCurrency(totals.contract)}</strong></div>
-        <div className="public-summary-line"><span>TAGIHAN</span><strong>{formatCurrency(totals.billed)}</strong></div>
-        <div className="public-summary-line"><span>TERBAYAR</span><strong>{formatCurrency(totals.paid)}</strong></div>
-        <div className="public-summary-line"><span>SISA PRK</span><strong>{formatCurrency(totals.remainingPrk)}</strong></div>
+      <aside className="public-annual-summary"><div className="public-annual-heading">SKKI BARA {titleYear}</div><strong>{formatCurrency(totals.pagu)}</strong><div className="public-summary-label">TOTAL PAGU</div>
+        <div className="public-summary-line"><span>MURNI</span><strong>{formatCurrency(notesTotals.murni)}</strong></div>
+        <div className="public-summary-line"><span>LANJUTAN</span><strong>{formatCurrency(notesTotals.lanjutan)}</strong></div>
+        <div className="public-summary-line"><span>KONTRAK</span><strong>{formatCurrency(totals.contract)}<small>{paguPercent(totals.contract)} dari pagu</small></strong></div>
+        <div className="public-summary-line"><span>SISA PRK</span><strong>{formatCurrency(totals.remainingPrk)}<small>{paguPercent(totals.remainingPrk)} dari pagu</small></strong></div>
       </aside>
 
       <div className="public-program-grid">
@@ -708,27 +718,28 @@ function PublicDashboard({ groups, rows, selectedYear, setSelectedYear, updatedA
           const billed = Number(group.billed || 0)
           const paid = Number(group.paid || 0)
           const unpaid = Math.max(0, billed - paid)
-          const uncovered = Math.max(0, rab - contract)
-          const progress = billed > 0 ? Math.min(100, paid / billed * 100) : 0
           const isContinuation = /luncuran|lanjutan/i.test(group.program)
-          const pieData = [{ name: 'Kontrak', value: contract }, { name: 'Sisa RAB', value: uncovered }].filter((item) => item.value > 0)
+          const pieData = [
+            { name: 'RAB', value: Math.max(0, rab), color: '#2878a5' },
+            { name: 'Kontrak', value: Math.max(0, contract), color: '#23866a' },
+            { name: 'Sisa PRK', value: Math.max(0, Number(group.prkRemaining || 0)), color: '#e5a23b' },
+            { name: 'Terbayar', value: Math.max(0, paid), color: '#d25d55' },
+            { name: 'Belum terbayar', value: Math.max(0, unpaid), color: '#8795a5' },
+          ]
+          const pieTotal = pieData.reduce((sum, item) => sum + item.value, 0)
+          const pieDataWithPercent = pieData.map((item) => ({ ...item, percentage: pieTotal ? item.value / pieTotal * 100 : 0 }))
           return <article className="public-program-card" key={group.id}>
             <h2 className={isContinuation ? 'is-continuation' : ''}>{group.program}</h2>
             <div className="public-program-total"><span>{group.year || 'Semua tahun'} / {group.publicCount} paket</span><strong>{formatCurrency(group.totalFinal || group.totalPrk)}</strong></div>
             <div className="public-program-body">
               <div className="public-donut-wrap">
-                {pieData.length ? <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={pieData} dataKey="value" nameKey="name" innerRadius="61%" outerRadius="84%" paddingAngle={2} stroke="none"><Cell fill="#2189ed" /><Cell fill="#dce3ec" /></Pie><Tooltip formatter={(value) => formatCurrency(value)} contentStyle={{ border: '1px solid #dce4ee', borderRadius: 4, fontSize: 10 }} /></PieChart></ResponsiveContainer> : <div className="public-donut-empty"><span /></div>}
-                <div className="public-donut-center"><strong>{Math.round(rab ? contract / rab * 100 : 0)}%</strong><span>kontrak</span></div>
+                {pieDataWithPercent.length ? <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={pieDataWithPercent} dataKey="value" nameKey="name" innerRadius="61%" outerRadius="84%" paddingAngle={2} stroke="none">{pieDataWithPercent.map((item) => <Cell key={item.name} fill={item.color} />)}</Pie><Tooltip formatter={(value, name) => [formatCurrency(value), name]} contentStyle={{ border: '1px solid #dce4ee', borderRadius: 4, fontSize: 10 }} /></PieChart></ResponsiveContainer> : <div className="public-donut-empty"><span /></div>}
+                <div className="public-donut-center"><strong>{pieDataWithPercent.length ? '100%' : '0%'}</strong><span>komposisi</span></div>
               </div>
               <div className="public-program-metrics">
-                <div><span>RAB</span><strong>{formatCurrency(rab)}</strong></div>
-                <div><span>KONTRAK</span><strong>{formatCurrency(contract)}</strong></div>
-                <div><span>SISA PRK</span><strong>{formatCurrency(group.prkRemaining)}</strong></div>
-                <div><span>TERBAYAR</span><strong>{formatCurrency(paid)}</strong></div>
-                <div><span>BELUM TERBAYAR</span><strong>{formatCurrency(unpaid)}</strong></div>
+                {pieDataWithPercent.map((item) => <div key={item.name}><span><i style={{ backgroundColor: item.color }} />{item.name}<small>{item.percentage.toFixed(1)}%</small></span><strong>{formatCurrency(item.value)}</strong></div>)}
               </div>
             </div>
-            <div className="public-payment-track"><span style={{ width: `${progress}%` }} /></div>
           </article>
         })}
         {!selectedGroups.length && <div className="public-empty-state">Belum ada ringkasan untuk pilihan filter ini.</div>}

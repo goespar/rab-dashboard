@@ -100,7 +100,8 @@
 .public-annual-summary > strong { display: block; padding: 11px 8px 3px; color: #17334c; text-align: center; font-size: 18px; font-variant-numeric: tabular-nums; }
 .public-summary-label { padding: 3px 8px 10px; color: #315068; text-align: center; font-size: 8px; font-weight: 750; }
 .public-summary-line { display: flex; justify-content: space-between; gap: 5px; padding: 9px 8px; border-top: 1px solid #d8e0e9; color: #51657a; font-size: 8px; }
-.public-summary-line strong { color: #17344d; font-size: 8px; font-variant-numeric: tabular-nums; }
+.public-summary-line strong { color: #17344d; font-size: 8px; font-variant-numeric: tabular-nums; text-align: right; }
+.public-summary-line small { display: block; margin-top: 3px; color: #718197; font-size: 7px; font-weight: 500; }
 .public-program-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; }
 .public-program-card { min-width: 0; overflow: hidden; border: 1px solid #8d9cad; background: #fff; }
 .public-program-card h2 { overflow: hidden; margin: 0; padding: 9px 10px; color: #073c4a; background: #04d7dc; text-align: center; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 800; }
@@ -117,7 +118,9 @@
 .public-program-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid #cbd5e1; border-left: 1px solid #cbd5e1; }
 .public-program-metrics > div { min-width: 0; padding: 6px 7px; border-right: 1px solid #cbd5e1; border-bottom: 1px solid #cbd5e1; }
 .public-program-metrics span, .public-program-metrics strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.public-program-metrics span { color: #607187; font-size: 7px; font-weight: 700; }
+.public-program-metrics span { display: flex; align-items: center; gap: 4px; color: #607187; font-size: 7px; font-weight: 700; }
+.public-program-metrics span i { flex: none; width: 6px; height: 6px; border-radius: 50%; }
+.public-program-metrics span small { margin-left: auto; color: #304b63; font-size: 7px; font-variant-numeric: tabular-nums; }
 .public-program-metrics strong { margin-top: 3px; color: #233d57; font-size: 9px; font-variant-numeric: tabular-nums; }
 .public-payment-track { height: 4px; background: #e8edf2; }
 .public-payment-track span { display: block; height: 100%; background: #15a5c9; }
