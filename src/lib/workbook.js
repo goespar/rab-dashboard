@@ -28,8 +28,38 @@ function normalizedHeader(value) {
 function toNumber(value) {
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0
   if (value === null || value === undefined || value === '') return 0
-  const parsed = Number(String(value).replace(/[Rp\s]/gi, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.'))
+  let normalized = String(value).replace(/[Rp\s\u00a0\u202f]/gi, '').trim()
+  const commaIndex = normalized.lastIndexOf(',')
+  const dotIndex = normalized.lastIndexOf('.')
+  if (commaIndex >= 0 && dotIndex >= 0) {
+    normalized = commaIndex > dotIndex
+      ? normalized.replace(/\./g, '').replace(',', '.')
+      : normalized.replace(/,/g, '')
+  } else if (commaIndex >= 0 || dotIndex >= 0) {
+    const separator = commaIndex >= 0 ? ',' : '.'
+    const parts = normalized.split(separator)
+    const isGroupedThousands = parts.length > 2
+      || (/^-?\d{1,3}$/.test(parts[0]) && /^\d{3}$/.test(parts[parts.length - 1]))
+    normalized = isGroupedThousands ? parts.join('') : normalized.replace(separator, '.')
+  }
+  const parsed = Number(normalized)
   return Number.isFinite(parsed) ? parsed : 0
+}
+
+export function parseNumber(value) {
+  return toNumber(value)
+}
+
+export function parseRupiahPrice(value) {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return 0
+    const scaled = value * 1000
+    if (!Number.isInteger(value) && Math.abs(value) >= 10 && Math.abs(scaled - Math.round(scaled)) < 0.000001) {
+      return Math.round(scaled)
+    }
+    return Math.round(value)
+  }
+  return Math.round(toNumber(value))
 }
 
 function findHeaderRow(rows) {
@@ -90,18 +120,20 @@ export async function importWorkbook(file) {
     const headers = row.map(normalizedHeader)
     return headers.includes('URAIAN') && headers.includes('HARGAMATERIAL') && headers.includes('HARGAJASA') && headers.includes('KRITERIA')
   }) : -1
+  const materialHeaders = materialHeaderIndex < 0 ? [] : materialSheet.rows[materialHeaderIndex].map(normalizedHeader)
+  const materialCell = (row, header) => row[materialHeaders.indexOf(header)]
   const materials = materialHeaderIndex < 0 ? [] : materialSheet.rows.slice(materialHeaderIndex + 1)
     .map((row, index) => ({
-      id: `master-${normalizedHeader(row[0])}-${normalizedHeader(row[8])}-${normalizedHeader(row[10])}-${index + 1}`,
+      id: `master-${normalizedHeader(materialCell(row, 'URAIAN'))}-${normalizedHeader(materialCell(row, 'KOMPONENPEKERJAAN'))}-${normalizedHeader(materialCell(row, 'KRITERIA'))}-${index + 1}`,
       code: '',
-      name: String(row[0] ?? '').trim(),
-      unit: String(row[2] ?? '').trim(),
-      materialPrice: toNumber(row[3]),
-      servicePrice: toNumber(row[4]),
-      componentActivity: String(row[8] ?? '').trim(),
-      operation: String(row[9] ?? '').trim(),
-      criteria: String(row[10] ?? '').trim().toUpperCase(),
-      source: String(row[11] ?? '').trim().toUpperCase(),
+      name: String(materialCell(row, 'URAIAN') ?? '').trim(),
+      unit: String(materialCell(row, 'SAT') ?? '').trim(),
+      materialPrice: parseRupiahPrice(materialCell(row, 'HARGAMATERIAL')),
+      servicePrice: parseRupiahPrice(materialCell(row, 'HARGAJASA')),
+      componentActivity: String(materialCell(row, 'KOMPONENPEKERJAAN') ?? '').trim(),
+      operation: String(materialCell(row, 'KETERANGAN') ?? '').trim(),
+      criteria: String(materialCell(row, 'KRITERIA') ?? '').trim().toUpperCase(),
+      source: String(materialCell(row, 'MDUNONMDU') ?? '').trim().toUpperCase(),
       notes: '',
       importedFrom: materialSheet.name,
       sourceRow: materialHeaderIndex + index + 2,

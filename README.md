@@ -17,10 +17,13 @@ Tanpa konfigurasi cloud, perubahan tersimpan di browser yang sedang digunakan. U
 2. Buka Extensions > Apps Script, salin isi `apps-script/Code.gs`, lalu simpan.
 3. Di Apps Script, buka Project Settings > Script Properties dan buat `SPREADSHEET_ID` dengan ID spreadsheet.
 4. Deploy sebagai Web app. Jalankan sebagai akun pemilik dan atur akses sesuai kebijakan organisasi Anda.
-5. Salin URL berakhiran `/exec`.
-6. Jika `apps-script/Code.gs` diperbarui, buka Deploy > Manage deployments, pilih Edit, pilih New version, lalu deploy ulang. URL `/exec` pada deployment yang sama biasanya tetap digunakan.
+5. Di Script Properties, buat `ADMIN_SETUP_KEY` dengan nilai rahasia acak panjang untuk setup akun admin pertama. Nilai ini dihapus otomatis setelah admin pertama berhasil dibuat.
+6. Salin URL berakhiran `/exec`.
+7. Jika `apps-script/Code.gs` diperbarui, buka Deploy > Manage deployments, pilih Edit, pilih New version, lalu deploy ulang. URL `/exec` pada deployment yang sama biasanya tetap digunakan.
 
-Akses web app Apps Script harus mengikuti kebijakan keamanan organisasi. Siapa pun yang dapat mengakses endpoint dapat membaca dan menulis rekap; pembatasan pengguna perlu ditambahkan sebelum data operasional sensitif dipublikasikan.
+Apps Script memeriksa sesi untuk semua operasi tulis dan pembacaan workflow. Endpoint dashboard publik mengembalikan ringkasan per program/tahun serta daftar terbatas kolom `NO.PRK`, `URAIAN`, program, tahun, keterangan, dan angka rekap. Nomor kontrak, nama vendor, dan rincian workflow tidak dipublikasikan. Pastikan kebijakan organisasi mengizinkan publik melihat No. PRK dan uraian sebelum mengaktifkan akses anonim.
+
+Pada kunjungan pertama, dashboard publik menampilkan tombol **Setup Admin**. Isi `ADMIN_SETUP_KEY`, nama, username, dan kata sandi admin minimal 12 karakter. Setelah admin dibuat, kunci setup dihapus dari Script Properties. Admin kemudian dapat membuat akun **Tim Perencanaan** dan **Viewer** pada menu Manajemen User. Viewer hanya dapat membaca; semua perubahan juga ditolak oleh server, bukan sekadar disembunyikan di antarmuka.
 
 ## Deploy ke GitHub dan Vercel
 
@@ -42,12 +45,16 @@ Kolom yang dipetakan meliputi No. PRK, No. PRK SKKI/Fix, No. WBS, Pos Anggaran, 
 2. **Master Kegiatan**: kelola paket pekerjaan, nama kegiatan, satuan, kriteria, dan PRK acuan; data impor `DATABASE KEGIATAN` juga tersedia di sini.
 3. **RAB Komponen**: kelompokkan komponen berdasarkan kriteria dan nama kegiatan; pilih material dari master atau masukkan harga manual serta kebutuhan per satuan kegiatan.
 4. **RAB Kegiatan**: pilih PRK dari hasil impor, kriteria, kegiatan, satuan, dan volume. Nilai RAB dihitung dari jumlah (kebutuhan komponen x harga material + tarif jasa) x volume kegiatan.
-5. **Rekap Material**: kebutuhan dihitung dari volume RAB x kebutuhan material per satuan, lalu dibandingkan dengan pemakaian aktual.
-6. **Realisasi**: catat tanggal, volume terlaksana, nilai tagihan, dan nilai dibayar. Sisa volume ditampilkan pada tabel RAB Kegiatan.
+4. **Finalisasi PA**: setelah RAB kegiatan disepakati, alihkan saldo RAB ke PA.
+5. **Realisasi**: catat tanggal, volume terlaksana, nilai tagihan, dan nilai dibayar. Sisa volume ditampilkan pada tabel RAB Kegiatan.
 
 Workflow memakai tab terpisah yang dibuat otomatis oleh Apps Script: `RAB_MATERIAL`, `DATABASE_KEGIATAN`, `RAB_KOMPONEN`, `RAB_KEGIATAN`, `REKAP_MATERIAL`, `PA_TRANSFERS`, dan `REALISASI`. Data hasil impor rekap tetap berada di tab `RABData`.
 
-**Finalisasi RAB ke PA** meminta konfirmasi, menolak transfer di atas saldo RAB, mengurangi `TOTAL RAB`, menambah `TOTAL PA`, dan menyamakan `NILAI KONTRAK` dengan saldo PA terbaru. Setiap transfer dicatat di `PA_TRANSFERS` dengan saldo sebelum/sesudah. Realisasi tetap dicatat terpisah dan tidak menjalankan proses tender atau penerbitan kontrak.
+Setiap tab workflow menyimpan nilai dalam kolom terpisah agar mudah dibaca dan difilter di Google Sheets. Setelah memperbarui dan men-deploy Apps Script, pemuatan workflow pertama akan mengonversi baris lama berformat `DATA_JSON` menjadi kolom tanpa membuang datanya.
+
+Setelah RAB kegiatan disepakati, **Finalisasi RAB ke PA** meminta konfirmasi, menolak transfer di atas saldo RAB, mengurangi `TOTAL RAB`, menambah `TOTAL PA`, dan mengisi `NILAI KONTRAK` dengan saldo PA terbaru. Nomor kontrak dan vendor pemenang dilengkapi melalui menu **Data Kontrak**; nilai kontrak dapat diedit di sana. Pembatalan transfer mengembalikan saldo RAB, PA, dan nilai kontrak ke posisi sebelumnya. Setiap transfer dicatat di `PA_TRANSFERS` dengan saldo sebelum/sesudah.
+
+Realisasi volume, tagihan, dan pembayaran tersimpan di tab `REALISASI`. Total tagihan dan pembayaran dari seluruh entri kegiatan pada PRK yang sama otomatis dijumlahkan ke kolom `TAGIHAN` dan `TOTAL BAYAR` di `RABData`, serta diperbarui kembali ketika entri realisasi diedit atau dihapus. Aplikasi tidak menjalankan proses tender atau menerbitkan kontrak.
 
 Setiap baris impor memakai ID internal berbasis sheet dan nomor baris, termasuk baris yang hanya memiliki No. RAB. Apps Script menyimpan ID tersebut pada kolom `RECORD ID` agar total RAB, referensi kegiatan, dan transfer tetap mengarah ke record yang sama. Sebelum deployment, jalankan `npm run lint` dan `npm run build`; setelah mengubah Apps Script, deploy sebagai versi baru dan uji endpoint `?action=health` serta satu transfer pada spreadsheet uji.
 

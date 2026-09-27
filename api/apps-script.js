@@ -11,7 +11,10 @@ export default async function handler(request, response) {
   }
   try {
     const target = new URL(endpoint)
-    if (request.method === 'GET') target.searchParams.set('action', String(request.query?.action || 'load'))
+    if (request.method === 'GET') {
+      target.searchParams.set('action', String(request.query?.action || 'load'))
+      if (request.query?.token) target.searchParams.set('token', String(request.query.token))
+    }
     const upstream = await fetch(target, {
       method: request.method,
       headers: request.method === 'POST' ? { 'Content-Type': 'text/plain;charset=utf-8' } : undefined,

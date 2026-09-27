@@ -115,3 +115,36 @@ tbody tr:hover { background: #f8fbfe; }
 .toast { border-color: #d7e7f0; color: #28415c; box-shadow: 0 8px 25px rgba(25,53,86,.14); }
 .toast svg { color: var(--pln-blue); }
 .sidebar-scrim { background: rgba(12,24,42,.44); }
+
+.workspace-label, .nav-section-label { font-size: 11px; }
+.nav-item { font-size: 14px; }
+.nav-count { font-size: 12px; }
+.breadcrumb, .sync-status, .row-count, .workflow-count { font-size: 13px; }
+.button, .select-wrap select, .search-field input, .field-label, .field-label input { font-size: 13px; }
+.eyebrow { font-size: 10px; }
+.heading-subtitle { font-size: 14px; }
+th, .workflow-table-scroll th { font-size: 11px; }
+td, .workflow-table-scroll td { font-size: 13px; }
+.money-cell, .contract-value, .year-cell { font-size: 11px; }
+.table-summary, .table-footnote, .workflow-stepbar span, .workflow-field, .workflow-summary > div { font-size: 12px; }
+.workflow-heading p:last-child, .workflow-hint, .workflow-search input, .workflow-segment button,
+.workflow-count, .workflow-table-scroll td, .workflow-empty span, .workflow-footnote,
+.workflow-overview-grid span, .workflow-overview-grid small { font-size: 12px; }
+.workflow-section-heading h2, .workflow-table-heading h2, .workflow-overview-heading h2 { font-size: 15px; }
+.workflow-field input, .workflow-field select { font-size: 13px; }
+.workflow-form-footer > span { font-size: 10px; }
+.workflow-transfer-preview span { font-size: 11px; }
+.workflow-transfer-preview strong { font-size: 13px; }
+.workflow-table-heading .eyebrow, .workflow-overview-heading .eyebrow { font-size: 10px; }
+.workflow-table-scroll th { font-size: 11px; }
+.workflow-empty strong { font-size: 13px; }
+.workflow-overview-grid strong { font-size: 17px; }
+
+@media (max-width: 680px) {
+  .workflow-stepbar span { font-size: 11px; }
+  .workflow-heading p:last-child { font-size: 13px; }
+  .workflow-summary > div { font-size: 11px; }
+  .workflow-transfer-preview strong { font-size: 11px; }
+  .workflow-table-scroll td { font-size: 12px; }
+  .workflow-overview-grid strong { font-size: 15px; }
+}
