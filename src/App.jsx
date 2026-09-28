@@ -684,7 +684,7 @@ function PublicProgramCard({ card, selectedYear }) {
   </article>
 }
 
-function PublicDashboard({ groups, rows, selectedYear, setSelectedYear, updatedAt, connection }) {
+function PublicDashboard({ rows, selectedYear, setSelectedYear, updatedAt, connection }) {
   const [programFilter, setProgramFilter] = useState('all')
   const [notesFilter, setNotesFilter] = useState('all')
   const publicYears = ['2024', '2025', '2026', '2027', '2028', '2029', '2030']
@@ -695,14 +695,12 @@ function PublicDashboard({ groups, rows, selectedYear, setSelectedYear, updatedA
     if (/murni/i.test(value)) return 'Murni'
     return value
   }
-  const selectedGroups = groups.filter((group) =>
-    (selectedYear === 'all' || String(group.year) === selectedYear)
-      && (programFilter === 'all' || programCode(group.program) === programFilter)
-  ).sort((left, right) => right.pagu - left.pagu)
-  const chartRows = rows.filter((row) =>
+  const filteredRows = rows.filter((row) =>
     (selectedYear === 'all' || String(row.year) === selectedYear)
       && (programFilter === 'all' || programCode(row.program) === programFilter)
+      && (notesFilter === 'all' || notesCategory(row) === notesFilter)
   )
+  const chartRows = filteredRows
   const programCards = [
     { code: 'SAR', category: 'Lanjutan', title: 'SAR LANJUTAN', chartType: 'pie' },
     { code: 'DAL', category: 'Lanjutan', title: 'DAL LANJUTAN', chartType: 'pie' },
@@ -723,51 +721,51 @@ function PublicDashboard({ groups, rows, selectedYear, setSelectedYear, updatedA
       remainingPrk: summary.remainingPrk + Number(row.prkRemaining || 0),
     }), { ...card, count: 0, pagu: 0, rab: 0, contract: 0, billed: 0, paid: 0, remainingPrk: 0 })
   })
-  const filteredRows = rows.filter((row) =>
-    (selectedYear === 'all' || String(row.year) === selectedYear)
-      && (programFilter === 'all' || programCode(row.program) === programFilter)
-      && (notesFilter === 'all' || notesCategory(row) === notesFilter)
-  )
-  const summaryRows = rows.filter((row) =>
-    (selectedYear === 'all' || String(row.year) === selectedYear)
-      && (programFilter === 'all' || programCode(row.program) === programFilter)
-  )
-  const totals = selectedGroups.reduce((sum, group) => ({
-    count: sum.count + Number(group.publicCount || 0),
-    pagu: sum.pagu + Number(group.totalFinal || group.totalPrk || 0),
-    rab: sum.rab + Number(group.rabTotal || 0),
-    contract: sum.contract + Number(group.contractValue || 0),
-    billed: sum.billed + Number(group.billed || 0),
-    paid: sum.paid + Number(group.paid || 0),
-    remainingPrk: sum.remainingPrk + Number(group.prkRemaining || 0),
+  const visibleProgramCards = programCards.filter((card) => card.count > 0)
+  const pureCards = visibleProgramCards.filter((card) => card.category === 'Murni')
+  const continuationCards = visibleProgramCards.filter((card) => card.category === 'Lanjutan')
+  const boardLayout = pureCards.length && continuationCards.length
+    ? ''
+    : pureCards.length ? 'public-board-layout--only-pure'
+      : continuationCards.length ? 'public-board-layout--only-continuation' : 'public-board-layout--empty'
+  const totals = filteredRows.reduce((sum, row) => ({
+    count: sum.count + 1,
+    pagu: sum.pagu + Number(row.totalFinal || row.totalPrk || 0),
+    rab: sum.rab + Number(row.rabTotal || 0),
+    contract: sum.contract + Number(row.contractValue || 0),
+    billed: sum.billed + Number(row.billed || 0),
+    paid: sum.paid + Number(row.paid || 0),
+    remainingPrk: sum.remainingPrk + Number(row.prkRemaining || 0),
   }), { count: 0, pagu: 0, rab: 0, contract: 0, billed: 0, paid: 0, remainingPrk: 0 })
-  const notesTotals = summaryRows.reduce((sum, row) => {
+  const notesTotals = filteredRows.reduce((sum, row) => {
     const category = notesCategory(row)
     if (category === 'Murni') sum.murni += Number(row.totalFinal || row.totalPrk || 0)
     if (category === 'Lanjutan') sum.lanjutan += Number(row.totalFinal || row.totalPrk || 0)
     return sum
   }, { murni: 0, lanjutan: 0 })
+  const hasMurniRows = filteredRows.some((row) => notesCategory(row) === 'Murni')
+  const hasContinuationRows = filteredRows.some((row) => notesCategory(row) === 'Lanjutan')
   const paguPercent = (value) => totals.pagu > 0 ? `${(value / totals.pagu * 100).toFixed(1)}%` : '0%'
-  const latestYear = [...new Set(groups.map((group) => String(group.year || '')).filter(Boolean))].sort().at(-1)
+  const latestYear = [...new Set(rows.map((row) => String(row.year || '')).filter(Boolean))].sort().at(-1)
   const titleYear = selectedYear === 'all' ? latestYear || new Date().getFullYear() : selectedYear
   const updatedLabel = updatedAt ? new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(updatedAt)) : '--:--'
 
   return <div className="public-dashboard">
     <section className="public-dashboard-heading"><div><p className="eyebrow">RINGKASAN ANGGARAN INVESTASI</p><h1>DASHBOARD AI {titleYear}</h1><p>Ringkasan RAB, kontrak, dan pembayaran.</p></div><div className="public-dashboard-filters"><label className="select-wrap"><span className="sr-only">Filter program</span><select value={programFilter} onChange={(event) => setProgramFilter(event.target.value)}><option value="all">Semua program</option><option value="DAL">DAL</option><option value="EFI">EFI</option><option value="SAR">SAR</option></select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter tahun</span><select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}><option value="all">Semua tahun</option>{publicYears.map((year) => <option key={year} value={year}>{year}</option>)}</select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter keterangan</span><select value={notesFilter} onChange={(event) => setNotesFilter(event.target.value)}><option value="all">Semua keterangan</option><option value="Murni">Murni</option><option value="Lanjutan">Lanjutan</option></select><ChevronDown size={15} /></label></div></section>
 
-    <section className="public-board-layout" aria-label="Ringkasan per program">
+    <section className={`public-board-layout ${boardLayout}`} aria-label="Ringkasan per program">
       <aside className="public-annual-summary"><div className="public-annual-heading">SKKI BARA {titleYear}</div><strong>{formatCurrency(totals.pagu)}</strong><div className="public-summary-label">TOTAL PAGU</div>
-        <div className="public-summary-line"><span>MURNI</span><strong>{formatCurrency(notesTotals.murni)}</strong></div>
-        <div className="public-summary-line"><span>LANJUTAN</span><strong>{formatCurrency(notesTotals.lanjutan)}</strong></div>
+        {hasMurniRows && <div className="public-summary-line"><span>MURNI</span><strong>{formatCurrency(notesTotals.murni)}</strong></div>}
+        {hasContinuationRows && <div className="public-summary-line"><span>LANJUTAN</span><strong>{formatCurrency(notesTotals.lanjutan)}</strong></div>}
         <div className="public-summary-line"><span>KONTRAK</span><strong>{formatCurrency(totals.contract)}<small>{paguPercent(totals.contract)} dari pagu</small></strong></div>
         <div className="public-summary-line"><span>SISA PRK</span><strong>{formatCurrency(totals.remainingPrk)}<small>{paguPercent(totals.remainingPrk)} dari pagu</small></strong></div>
       </aside>
-      <div className="public-program-column public-program-column--pure" aria-label="Program murni">
-        {programCards.filter((card) => card.category === 'Murni').map((card) => <PublicProgramCard key={card.title} card={card} selectedYear={selectedYear} />)}
-      </div>
-      <div className="public-program-column public-program-column--continuation" aria-label="Program lanjutan">
-        {programCards.filter((card) => card.category === 'Lanjutan').map((card) => <PublicProgramCard key={card.title} card={card} selectedYear={selectedYear} />)}
-      </div>
+      {pureCards.length > 0 && <div className="public-program-column public-program-column--pure" aria-label="Program murni">
+        {pureCards.map((card) => <PublicProgramCard key={card.title} card={card} selectedYear={selectedYear} />)}
+      </div>}
+      {continuationCards.length > 0 && <div className="public-program-column public-program-column--continuation" aria-label="Program lanjutan">
+        {continuationCards.map((card) => <PublicProgramCard key={card.title} card={card} selectedYear={selectedYear} />)}
+      </div>}
 
     </section>
 
