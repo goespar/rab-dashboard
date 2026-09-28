@@ -656,6 +656,34 @@ function ProjectTable({ records, onEdit, onViewAll, compact = false, readOnly = 
   </section>
 }
 
+function PublicProgramCard({ card, selectedYear }) {
+  const unpaid = Math.max(0, card.billed - card.paid)
+  const pieData = [
+    { name: 'RAB', value: Math.max(0, card.rab), color: '#2878a5' },
+    { name: 'Kontrak', value: Math.max(0, card.contract), color: '#e5a23b' },
+    { name: 'Terbayar', value: Math.max(0, card.paid), color: '#23866a' },
+    { name: 'Sisa PRK', value: Math.max(0, card.remainingPrk), color: '#d25d55' },
+  ]
+  const pieTotal = pieData.reduce((sum, item) => sum + item.value, 0)
+  const pieDataWithPercent = pieData.map((item) => ({ ...item, percentage: pieTotal ? item.value / pieTotal * 100 : 0 }))
+  const chartType = card.chartType === 'donut' ? 'donut' : 'pie'
+
+  return <article className={`public-program-card public-program-card--${chartType}`}>
+    <h2>{card.title}</h2>
+    <div className="public-program-total"><span>{selectedYear === 'all' ? 'Semua tahun' : selectedYear} / {card.count} paket</span><strong>{formatCurrency(card.pagu)}</strong></div>
+    <div className="public-program-body">
+      <div className={`public-chart-wrap public-chart-wrap--${chartType}`}>
+        {pieTotal ? <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={pieDataWithPercent} dataKey="value" nameKey="name" innerRadius={chartType === 'donut' ? '61%' : 0} outerRadius="84%" paddingAngle={2} stroke="none">{pieDataWithPercent.map((item) => <Cell key={item.name} fill={item.color} />)}</Pie><Tooltip formatter={(value, name) => [formatCurrency(value), name]} contentStyle={{ border: '1px solid #dce4ee', borderRadius: 4, fontSize: 10 }} /></PieChart></ResponsiveContainer> : <div className={`public-chart-empty public-chart-empty--${chartType}`} />}
+        {chartType === 'donut' && <div className="public-donut-center"><strong>{pieTotal ? '100%' : '0%'}</strong><span>komposisi</span></div>}
+      </div>
+      <div className="public-program-metrics">
+        {pieDataWithPercent.map((item) => <div key={item.name}><span><i style={{ backgroundColor: item.color }} />{item.name}<small>{item.percentage.toFixed(1)}%</small></span><strong>{formatCurrency(item.value)}</strong></div>)}
+        <div className="public-unpaid-metric"><span><i />Belum terbayar</span><strong>{formatCurrency(unpaid)}</strong></div>
+      </div>
+    </div>
+  </article>
+}
+
 function PublicDashboard({ groups, rows, selectedYear, setSelectedYear, updatedAt, connection }) {
   const [programFilter, setProgramFilter] = useState('all')
   const [notesFilter, setNotesFilter] = useState('all')
@@ -671,6 +699,30 @@ function PublicDashboard({ groups, rows, selectedYear, setSelectedYear, updatedA
     (selectedYear === 'all' || String(group.year) === selectedYear)
       && (programFilter === 'all' || programCode(group.program) === programFilter)
   ).sort((left, right) => right.pagu - left.pagu)
+  const chartRows = rows.filter((row) =>
+    (selectedYear === 'all' || String(row.year) === selectedYear)
+      && (programFilter === 'all' || programCode(row.program) === programFilter)
+  )
+  const programCards = [
+    { code: 'SAR', category: 'Lanjutan', title: 'SAR LANJUTAN', chartType: 'pie' },
+    { code: 'DAL', category: 'Lanjutan', title: 'DAL LANJUTAN', chartType: 'pie' },
+    { code: 'EFI', category: 'Lanjutan', title: 'EFI LANJUTAN', chartType: 'pie' },
+    { code: 'SAR', category: 'Murni', title: 'SAR MURNI', chartType: 'donut' },
+    { code: 'DAL', category: 'Murni', title: 'DAL MURNI', chartType: 'donut' },
+    { code: 'EFI', category: 'Murni', title: 'EFI MURNI', chartType: 'donut' },
+  ].map((card) => {
+    const matchingRows = chartRows.filter((row) => programCode(row.program) === card.code && notesCategory(row) === card.category)
+    return matchingRows.reduce((summary, row) => ({
+      ...summary,
+      count: summary.count + 1,
+      pagu: summary.pagu + Number(row.totalFinal || row.totalPrk || 0),
+      rab: summary.rab + Number(row.rabTotal || 0),
+      contract: summary.contract + Number(row.contractValue || 0),
+      billed: summary.billed + Number(row.billed || 0),
+      paid: summary.paid + Number(row.paid || 0),
+      remainingPrk: summary.remainingPrk + Number(row.prkRemaining || 0),
+    }), { ...card, count: 0, pagu: 0, rab: 0, contract: 0, billed: 0, paid: 0, remainingPrk: 0 })
+  })
   const filteredRows = rows.filter((row) =>
     (selectedYear === 'all' || String(row.year) === selectedYear)
       && (programFilter === 'all' || programCode(row.program) === programFilter)
@@ -710,40 +762,13 @@ function PublicDashboard({ groups, rows, selectedYear, setSelectedYear, updatedA
         <div className="public-summary-line"><span>KONTRAK</span><strong>{formatCurrency(totals.contract)}<small>{paguPercent(totals.contract)} dari pagu</small></strong></div>
         <div className="public-summary-line"><span>SISA PRK</span><strong>{formatCurrency(totals.remainingPrk)}<small>{paguPercent(totals.remainingPrk)} dari pagu</small></strong></div>
       </aside>
-
-      <div className="public-program-grid">
-        {selectedGroups.map((group) => {
-          const rab = Number(group.rabTotal || 0)
-          const contract = Number(group.contractValue || 0)
-          const billed = Number(group.billed || 0)
-          const paid = Number(group.paid || 0)
-          const unpaid = Math.max(0, billed - paid)
-          const isContinuation = /luncuran|lanjutan/i.test(group.program)
-          const pieData = [
-            { name: 'RAB', value: Math.max(0, rab), color: '#2878a5' },
-            { name: 'Kontrak', value: Math.max(0, contract), color: '#23866a' },
-            { name: 'Sisa PRK', value: Math.max(0, Number(group.prkRemaining || 0)), color: '#e5a23b' },
-            { name: 'Terbayar', value: Math.max(0, paid), color: '#d25d55' },
-            { name: 'Belum terbayar', value: Math.max(0, unpaid), color: '#8795a5' },
-          ]
-          const pieTotal = pieData.reduce((sum, item) => sum + item.value, 0)
-          const pieDataWithPercent = pieData.map((item) => ({ ...item, percentage: pieTotal ? item.value / pieTotal * 100 : 0 }))
-          return <article className="public-program-card" key={group.id}>
-            <h2 className={isContinuation ? 'is-continuation' : ''}>{group.program}</h2>
-            <div className="public-program-total"><span>{group.year || 'Semua tahun'} / {group.publicCount} paket</span><strong>{formatCurrency(group.totalFinal || group.totalPrk)}</strong></div>
-            <div className="public-program-body">
-              <div className="public-donut-wrap">
-                {pieDataWithPercent.length ? <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={pieDataWithPercent} dataKey="value" nameKey="name" innerRadius="61%" outerRadius="84%" paddingAngle={2} stroke="none">{pieDataWithPercent.map((item) => <Cell key={item.name} fill={item.color} />)}</Pie><Tooltip formatter={(value, name) => [formatCurrency(value), name]} contentStyle={{ border: '1px solid #dce4ee', borderRadius: 4, fontSize: 10 }} /></PieChart></ResponsiveContainer> : <div className="public-donut-empty"><span /></div>}
-                <div className="public-donut-center"><strong>{pieDataWithPercent.length ? '100%' : '0%'}</strong><span>komposisi</span></div>
-              </div>
-              <div className="public-program-metrics">
-                {pieDataWithPercent.map((item) => <div key={item.name}><span><i style={{ backgroundColor: item.color }} />{item.name}<small>{item.percentage.toFixed(1)}%</small></span><strong>{formatCurrency(item.value)}</strong></div>)}
-              </div>
-            </div>
-          </article>
-        })}
-        {!selectedGroups.length && <div className="public-empty-state">Belum ada ringkasan untuk pilihan filter ini.</div>}
+      <div className="public-program-column public-program-column--pure" aria-label="Program murni">
+        {programCards.filter((card) => card.category === 'Murni').map((card) => <PublicProgramCard key={card.title} card={card} selectedYear={selectedYear} />)}
       </div>
+      <div className="public-program-column public-program-column--continuation" aria-label="Program lanjutan">
+        {programCards.filter((card) => card.category === 'Lanjutan').map((card) => <PublicProgramCard key={card.title} card={card} selectedYear={selectedYear} />)}
+      </div>
+
     </section>
 
     <section className="public-dashboard-table panel">
