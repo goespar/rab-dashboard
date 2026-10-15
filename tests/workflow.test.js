@@ -351,14 +351,36 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
     getDataRange() { return { getValues: () => this.values.map((row) => [...row]) } }
     getLastRow() { return this.values.length }
     clearContents() { this.values = [] }
-    getRange(row, column) {
-      return {
+    getRange(row, column, numRows = 1, numColumns = 1) {
+      const range = {
+        getValue: () => this.values[row - 1]?.[column - 1] ?? '',
+        getValues: () => Array.from({ length: numRows }, (_, rowIndex) =>
+          Array.from({ length: numColumns }, (_, columnIndex) => this.values[row - 1 + rowIndex]?.[column - 1 + columnIndex] ?? ''),
+        ),
         setValue: (value) => { this.values[row - 1][column - 1] = value },
         setValues: (rows) => rows.forEach((values, rowIndex) => {
           this.values[row - 1 + rowIndex] ??= []
           values.forEach((value, columnIndex) => { this.values[row - 1 + rowIndex][column - 1 + columnIndex] = value })
         }),
       }
+      range.createTextFinder = (searchText) => {
+        let matchEntireCell = false
+        return {
+          matchEntireCell(value) { matchEntireCell = value; return this },
+          findNext: () => {
+            for (let rowIndex = row - 1; rowIndex < row - 1 + numRows; rowIndex += 1) {
+              for (let columnIndex = column - 1; columnIndex < column - 1 + numColumns; columnIndex += 1) {
+                const cell = String(this.values[rowIndex]?.[columnIndex] ?? '')
+                if (matchEntireCell ? cell === String(searchText) : cell.includes(String(searchText))) {
+                  return { getRow: () => rowIndex + 1 }
+                }
+              }
+            }
+            return null
+          },
+        }
+      }
+      return range
     }
     appendRow(row) { this.values.push(row) }
     deleteRow(row) { this.values.splice(row - 1, 1) }
@@ -377,12 +399,18 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
     insertSheet: (name) => { sheets[name] = new MockSheet(); return sheets[name] },
   }
   const properties = new Map([['ADMIN_SETUP_KEY', 'one-time-setup-secret']])
+  const authCache = new Map()
   let uuid = 0
   const context = {
     SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet, openById: () => spreadsheet },
     PropertiesService: { getScriptProperties: () => ({
       getProperty: (key) => properties.get(key) || '',
       deleteProperty: (key) => properties.delete(key),
+    }) },
+    CacheService: { getScriptCache: () => ({
+      get: (key) => authCache.get(key) || null,
+      put: (key, value) => authCache.set(key, value),
+      remove: (key) => authCache.delete(key),
     }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     ContentService: {
@@ -400,6 +428,8 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
   vm.runInNewContext(script, context)
   const post = (payload) => JSON.parse(context.doPost({ postData: { contents: JSON.stringify(payload) } }).text)
 
+  assert.equal(context.sha256Hex_('abc'), createHash('sha256').update('abc').digest('hex'))
+  assert.equal(context.sha256Hex_('kata sandi 🔐'), createHash('sha256').update('kata sandi 🔐').digest('hex'))
   const publicResponse = JSON.parse(context.doGet({ parameter: { action: 'publicDashboard' } }).text)
   assert.equal(publicResponse.ok, true)
   assert.equal(publicResponse.summary.groups[0].pagu, 1000)
@@ -412,7 +442,7 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
   assert.equal(publicResponse.summary.rows[0].prk, 'PRK-SECRET')
   assert.equal(publicResponse.summary.rows[0].description, 'Uraian rahasia')
   assert.equal(publicResponse.summary.rows[0].prkRemaining, 250)
-  assert.equal(dataSheet.values[1][headers.indexOf('SISA PRK')], 250)
+  assert.equal(dataSheet.values[1][headers.indexOf('SISA PRK')], 450)
   assert.equal('vendor' in publicResponse.summary.rows[0], false)
   assert.equal('contractNumber' in publicResponse.summary.rows[0], false)
   assert.equal('records' in publicResponse, false)
@@ -425,6 +455,16 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
   const admin = post({ action: 'bootstrapAdmin', setupKey: 'one-time-setup-secret', username: 'owner', name: 'Admin Utama', password: 'password-admin-123' })
   assert.equal(admin.ok, true, admin.error)
   assert.equal(admin.user.role, 'admin')
+  context.authStatus_()
+  const readUsers = context.readUsers_
+  context.readUsers_ = () => { throw new Error('Login did not use the short-lived auth cache.') }
+  assert.equal(context.login_('owner', 'password-admin-123').ok, true)
+  context.readUsers_ = readUsers
+  let legacyDigest = 'mock-uuid-1mock-uuid-2:password-admin-123'
+  for (let index = 0; index < 10000; index += 1) {
+    legacyDigest = createHash('sha256').update(legacyDigest, 'utf8').digest('hex') + 'mock-uuid-1mock-uuid-2'
+  }
+  assert.equal(sheets.USERS.values[1][4], legacyDigest.slice(0, 64))
   assert.equal(properties.has('ADMIN_SETUP_KEY'), false)
   dataSheet.values[1][headers.indexOf('SISA PRK')] = 9999
   const privateData = JSON.parse(context.doGet({ parameter: { action: 'load', token: admin.token } }).text)
@@ -432,8 +472,11 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
   assert.equal(privateData.records[0].prkRemaining, 250)
   assert.equal(dataSheet.values[1][headers.indexOf('SISA PRK')], 250)
 
+  context.authStatus_()
+  assert.equal(authCache.has('rab-auth-users-v1'), true)
   const viewer = post({ action: 'saveUser', token: admin.token, user: { username: 'viewer', name: 'Viewer', role: 'viewer', password: 'password-viewer-123', active: true } })
   assert.equal(viewer.ok, true, viewer.error)
+  assert.equal(authCache.has('rab-auth-users-v1'), false)
   const viewerLogin = post({ action: 'login', username: 'viewer', password: 'password-viewer-123' })
   assert.equal(viewerLogin.ok, true, viewerLogin.error)
   const blockedWrite = post({ action: 'save', token: viewerLogin.token, records: [] })
@@ -442,4 +485,8 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
   const blockedRead = JSON.parse(context.doGet({ parameter: { action: 'load' } }).text)
   assert.equal(blockedRead.ok, false)
   assert.equal(blockedRead.code, 'AUTH_REQUIRED')
+
+  const loggedOut = post({ action: 'logout', token: admin.token })
+  assert.equal(loggedOut.ok, true)
+  assert.equal(sheets.SESSIONS.values.some((row) => row[0] === createHash('sha256').update(admin.token).digest('hex')), false)
 })

@@ -2,6 +2,18 @@ const DATA_SHEET_NAME = 'RABData'
 const USERS_SHEET_NAME = 'USERS'
 const SESSIONS_SHEET_NAME = 'SESSIONS'
 const SESSION_HOURS = 8
+const AUTH_USERS_CACHE_KEY = 'rab-auth-users-v1'
+const AUTH_USERS_CACHE_SECONDS = 15
+const SHA256_K_ = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]
 const USER_ROLES = ['admin', 'planner', 'viewer']
 const WORKFLOW_SHEETS = {
   materials: 'RAB_MATERIAL',
@@ -192,15 +204,13 @@ function json_(value) {
 
 function getUsersSheet_() {
   const sheet = getWorkflowSheet_(USERS_SHEET_NAME)
-  const values = sheet.getDataRange().getValues()
-  if (!values.length || values[0][1] === 'DATA_JSON') sheet.getRange(1, 1, 1, 8).setValues([['ID', 'USERNAME', 'NAME', 'ROLE', 'PASSWORD_HASH', 'SALT', 'ACTIVE', 'CREATED_AT']])
+  if (sheet.getRange(1, 2).getValue() === 'DATA_JSON') sheet.getRange(1, 1, 1, 8).setValues([['ID', 'USERNAME', 'NAME', 'ROLE', 'PASSWORD_HASH', 'SALT', 'ACTIVE', 'CREATED_AT']])
   return sheet
 }
 
 function getSessionsSheet_() {
   const sheet = getWorkflowSheet_(SESSIONS_SHEET_NAME)
-  const values = sheet.getDataRange().getValues()
-  if (!values.length || values[0][1] === 'DATA_JSON') sheet.getRange(1, 1, 1, 4).setValues([['TOKEN_HASH', 'USER_ID', 'EXPIRES_AT', 'CREATED_AT']])
+  if (sheet.getRange(1, 2).getValue() === 'DATA_JSON') sheet.getRange(1, 1, 1, 4).setValues([['TOKEN_HASH', 'USER_ID', 'EXPIRES_AT', 'CREATED_AT']])
   return sheet
 }
 
@@ -215,21 +225,122 @@ function readUsers_() {
 
 function authStatus_() {
   const users = readUsers_()
+  cacheAuthUsers_(users)
   return { setupRequired: users.length === 0, setupAvailable: Boolean(PropertiesService.getScriptProperties().getProperty('ADMIN_SETUP_KEY')) }
+}
+
+function cacheAuthUsers_(users) {
+  if (typeof CacheService !== 'undefined') {
+    CacheService.getScriptCache().put(AUTH_USERS_CACHE_KEY, JSON.stringify(users), AUTH_USERS_CACHE_SECONDS)
+  }
+}
+
+function cachedAuthUsers_() {
+  if (typeof CacheService === 'undefined') return null
+  const cached = CacheService.getScriptCache().get(AUTH_USERS_CACHE_KEY)
+  return cached ? JSON.parse(cached) : null
+}
+
+function clearAuthUsersCache_() {
+  if (typeof CacheService !== 'undefined') CacheService.getScriptCache().remove(AUTH_USERS_CACHE_KEY)
 }
 
 function hashPassword_(password, salt) {
   let digest = salt + ':' + password
   for (let index = 0; index < 10000; index += 1) {
-    const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, digest, Utilities.Charset.UTF_8)
-    digest = bytes.map((byte) => ('0' + ((byte + 256) % 256).toString(16)).slice(-2)).join('') + salt
+    digest = sha256Hex_(digest) + salt
   }
   return digest.slice(0, 64)
 }
 
+function sha256Hex_(value) {
+  const bytes = []
+  for (let index = 0; index < value.length; index += 1) {
+    let codePoint = value.charCodeAt(index)
+    if (codePoint >= 0xd800 && codePoint <= 0xdbff && index + 1 < value.length) {
+      const next = value.charCodeAt(index + 1)
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        codePoint = 0x10000 + ((codePoint - 0xd800) << 10) + (next - 0xdc00)
+        index += 1
+      } else {
+        codePoint = 0xfffd
+      }
+    } else if (codePoint >= 0xdc00 && codePoint <= 0xdfff) {
+      codePoint = 0xfffd
+    }
+    if (codePoint < 0x80) bytes.push(codePoint)
+    else if (codePoint < 0x800) bytes.push(0xc0 | (codePoint >> 6), 0x80 | (codePoint & 0x3f))
+    else if (codePoint < 0x10000) bytes.push(0xe0 | (codePoint >> 12), 0x80 | ((codePoint >> 6) & 0x3f), 0x80 | (codePoint & 0x3f))
+    else bytes.push(0xf0 | (codePoint >> 18), 0x80 | ((codePoint >> 12) & 0x3f), 0x80 | ((codePoint >> 6) & 0x3f), 0x80 | (codePoint & 0x3f))
+  }
+
+  const bitLength = bytes.length * 8
+  bytes.push(0x80)
+  while (bytes.length % 64 !== 56) bytes.push(0)
+  const highLength = Math.floor(bitLength / 0x100000000)
+  const lowLength = bitLength >>> 0
+  bytes.push((highLength >>> 24) & 0xff, (highLength >>> 16) & 0xff, (highLength >>> 8) & 0xff, highLength & 0xff,
+    (lowLength >>> 24) & 0xff, (lowLength >>> 16) & 0xff, (lowLength >>> 8) & 0xff, lowLength & 0xff)
+
+  const state = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]
+  const words = new Uint32Array(64)
+  const rotateRight = (word, amount) => (word >>> amount) | (word << (32 - amount))
+  for (let offset = 0; offset < bytes.length; offset += 64) {
+    for (let index = 0; index < 16; index += 1) {
+      const byteIndex = offset + index * 4
+      words[index] = ((bytes[byteIndex] << 24) | (bytes[byteIndex + 1] << 16) | (bytes[byteIndex + 2] << 8) | bytes[byteIndex + 3]) >>> 0
+    }
+    for (let index = 16; index < 64; index += 1) {
+      const left = words[index - 15]
+      const right = words[index - 2]
+      const smallSigma0 = rotateRight(left, 7) ^ rotateRight(left, 18) ^ (left >>> 3)
+      const smallSigma1 = rotateRight(right, 17) ^ rotateRight(right, 19) ^ (right >>> 10)
+      words[index] = (words[index - 16] + smallSigma0 + words[index - 7] + smallSigma1) >>> 0
+    }
+
+    let a = state[0], b = state[1], c = state[2], d = state[3]
+    let e = state[4], f = state[5], g = state[6], h = state[7]
+    for (let index = 0; index < 64; index += 1) {
+      const bigSigma1 = rotateRight(e, 6) ^ rotateRight(e, 11) ^ rotateRight(e, 25)
+      const choice = (e & f) ^ (~e & g)
+      const temp1 = (h + bigSigma1 + choice + SHA256_K_[index] + words[index]) >>> 0
+      const bigSigma0 = rotateRight(a, 2) ^ rotateRight(a, 13) ^ rotateRight(a, 22)
+      const majority = (a & b) ^ (a & c) ^ (b & c)
+      const temp2 = (bigSigma0 + majority) >>> 0
+      h = g
+      g = f
+      f = e
+      e = (d + temp1) >>> 0
+      d = c
+      c = b
+      b = a
+      a = (temp1 + temp2) >>> 0
+    }
+    state[0] = (state[0] + a) >>> 0
+    state[1] = (state[1] + b) >>> 0
+    state[2] = (state[2] + c) >>> 0
+    state[3] = (state[3] + d) >>> 0
+    state[4] = (state[4] + e) >>> 0
+    state[5] = (state[5] + f) >>> 0
+    state[6] = (state[6] + g) >>> 0
+    state[7] = (state[7] + h) >>> 0
+  }
+  return state.map((word) => ('00000000' + word.toString(16)).slice(-8)).join('')
+}
+
+function bytesToHex_(bytes) {
+  const hexDigits = '0123456789abcdef'
+  let result = ''
+  for (let index = 0; index < bytes.length; index += 1) {
+    const byte = (bytes[index] + 256) % 256
+    result += hexDigits.charAt(byte >> 4) + hexDigits.charAt(byte & 15)
+  }
+  return result
+}
+
 function hashToken_(token) {
   const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(token || ''), Utilities.Charset.UTF_8)
-  return bytes.map((byte) => ('0' + ((byte + 256) % 256).toString(16)).slice(-2)).join('')
+  return bytesToHex_(bytes)
 }
 
 function safeUser_(user) {
@@ -253,6 +364,7 @@ function bootstrapAdmin_(payload) {
     const salt = Utilities.getUuid() + Utilities.getUuid()
     const user = { id: Utilities.getUuid(), username, name, role: 'admin', passwordHash: hashPassword_(password, salt), salt, active: true, createdAt: new Date().toISOString() }
     getUsersSheet_().appendRow([user.id, user.username, user.name, user.role, user.passwordHash, user.salt, true, user.createdAt])
+    cacheAuthUsers_([user])
     properties.deleteProperty('ADMIN_SETUP_KEY')
     return login_(username, password)
   } finally {
@@ -263,7 +375,8 @@ function bootstrapAdmin_(payload) {
 function login_(usernameValue, passwordValue) {
   const username = String(usernameValue || '').trim().toLowerCase()
   const password = String(passwordValue || '')
-  const user = readUsers_().find((item) => item.username.toLowerCase() === username && item.active)
+  const users = cachedAuthUsers_() || readUsers_()
+  const user = users.find((item) => item.username.toLowerCase() === username && item.active)
   if (!user || hashPassword_(password, user.salt) !== user.passwordHash) return { ok: false, error: 'Username atau kata sandi salah.' }
 
   const token = Utilities.getUuid() + Utilities.getUuid()
@@ -276,10 +389,16 @@ function login_(usernameValue, passwordValue) {
 function authorize_(token) {
   if (!token) return { ok: false, error: 'Silakan login untuk mengakses data ini.' }
   const tokenHash = hashToken_(token)
-  const sessionValues = getSessionsSheet_().getDataRange().getValues()
+  const sessionsSheet = getSessionsSheet_()
+  const lastRow = sessionsSheet.getLastRow()
+  const sessionRange = lastRow > 1
+    ? sessionsSheet.getRange(2, 1, lastRow - 1, 1).createTextFinder(tokenHash).matchEntireCell(true).findNext()
+    : null
+  const session = sessionRange
+    ? sessionsSheet.getRange(sessionRange.getRow(), 1, 1, 4).getValues()[0]
+    : null
   const now = Date.now()
-  const session = sessionValues.slice(1).find((row) => row[0] === tokenHash && new Date(row[2]).getTime() > now)
-  if (!session) return { ok: false, error: 'Sesi berakhir atau tidak valid. Silakan login kembali.' }
+  if (!session || new Date(session[2]).getTime() <= now) return { ok: false, error: 'Sesi berakhir atau tidak valid. Silakan login kembali.' }
   const user = readUsers_().find((item) => item.id === String(session[1]) && item.active)
   if (!user) return { ok: false, error: 'Akun tidak aktif. Hubungi admin.' }
   return { ok: true, user: safeUser_(user) }
@@ -288,9 +407,13 @@ function authorize_(token) {
 function logout_(token) {
   const sheet = getSessionsSheet_()
   const tokenHash = hashToken_(token)
-  const values = sheet.getDataRange().getValues()
-  const index = values.findIndex((row, rowIndex) => rowIndex > 0 && row[0] === tokenHash)
-  if (index > 0) sheet.deleteRow(index + 1)
+  const lastRow = sheet.getLastRow()
+  if (lastRow <= 1) return { ok: true }
+  const match = sheet.getRange(2, 1, lastRow - 1, 1)
+    .createTextFinder(tokenHash)
+    .matchEntireCell(true)
+    .findNext()
+  if (match) sheet.deleteRow(match.getRow())
   return { ok: true }
 }
 
@@ -326,12 +449,12 @@ function saveUser_(payload) {
   const row = [user.id, user.username, user.name, user.role, user.passwordHash, user.salt, user.active, user.createdAt]
   if (existing) sheet.getRange(existing.rowNumber, 1, 1, row.length).setValues([row])
   else sheet.appendRow(row)
+  clearAuthUsersCache_()
   return { ok: true, user: safeUser_(user) }
 }
 
 function publicDashboard_() {
   const sheet = getDataSheet_()
-  syncPrkRemainingColumn_(sheet)
   const values = sheet.getDataRange().getValues()
   const headers = values.shift() || []
   const column = (name) => headers.indexOf(name)

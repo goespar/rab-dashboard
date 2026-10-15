@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity, ArrowDownToLine, ArrowUpFromLine, BarChart3, Boxes, Check, ChevronDown,
-  CircleAlert, ClipboardList, Cloud, FileSpreadsheet, FolderKanban, LayoutDashboard,
+  CircleAlert, ClipboardList, Cloud, FileSpreadsheet, FolderKanban, LayoutDashboard, LoaderCircle,
   FileText, LogIn, LogOut, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Search, Settings2, ShieldCheck, Upload, Users, Wrench, X, Zap,
 } from 'lucide-react'
 import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
@@ -12,6 +12,7 @@ import './pln-theme.css'
 
 const STORAGE_KEY = 'rab-monitor-records-v1'
 const WORKFLOW_STORAGE_KEY = 'rab-monitor-workflow-v1'
+const PUBLIC_CACHE_KEY = 'rab-monitor-public-dashboard-v1'
 const SESSION_KEY = 'rab-monitor-session-v1'
 const EMPTY_COLLECTIONS = { materials: [], activityCatalog: [], components: [], activities: [], paTransfers: [], materialRecap: [], realizations: [] }
 const WORKFLOW_NAV = [
@@ -31,6 +32,37 @@ function readSession() {
   } catch {
     return null
   }
+}
+
+function readPublicDashboardCache() {
+  try {
+    const cached = JSON.parse(window.localStorage.getItem(PUBLIC_CACHE_KEY) || 'null')
+    const isFresh = cached && Date.now() - cached.cachedAt < 30000
+    return isFresh && Array.isArray(cached.summary?.rows) && Array.isArray(cached.summary?.groups)
+      ? cached.summary
+      : null
+  } catch (error) {
+    console.warn('Cache dashboard publik tidak dapat dibaca.', error)
+    return null
+  }
+}
+
+function writePublicDashboardCache(summary) {
+  try {
+    window.localStorage.setItem(PUBLIC_CACHE_KEY, JSON.stringify({ cachedAt: Date.now(), summary }))
+  } catch (error) {
+    console.warn('Cache dashboard publik tidak dapat disimpan.', error)
+  }
+}
+
+function publicGroupsToRecords(groups) {
+  return groups.map((group, index) => ({
+    id: `public-${index}`, program: group.program, year: group.year, publicCount: group.count,
+    totalFinal: group.pagu, totalPrk: group.pagu, rabTotal: group.rab, paTotal: group.pa,
+    contractValue: group.contract, billed: group.billed, paid: group.paid,
+    prkRemaining: group.remainingPrk, contractCount: group.contractCount,
+    contractNumber: group.contract ? 'Ringkasan' : '',
+  }))
 }
 
 function apiGet(action, token = readSession()?.token) {
@@ -77,13 +109,16 @@ const DASHBOARD_COLUMNS = [
 const MONEY_COLUMNS = new Set(['totalPrk', 'relocation', 'skkiRevision', 'totalFinal', 'rabTotal', 'paTotal', 'contractValue', 'paReturn', 'costReplacement', 'billed', 'paid', 'prkRemaining'])
 
 function App() {
+  const [publicCache] = useState(readPublicDashboardCache)
   const [auth, setAuth] = useState(null)
   const [authStatus, setAuthStatus] = useState(null)
   const [authDialog, setAuthDialog] = useState('')
   const [authMessage, setAuthMessage] = useState('')
   const [authBusy, setAuthBusy] = useState(false)
-  const [records, setRecords] = useState(sampleRecords)
-  const [publicRows, setPublicRows] = useState([])
+  const [authDataLoading, setAuthDataLoading] = useState(false)
+  const [authDataReady, setAuthDataReady] = useState(false)
+  const [records, setRecords] = useState(() => publicCache ? publicGroupsToRecords(publicCache.groups) : sampleRecords)
+  const [publicRows, setPublicRows] = useState(() => (publicCache?.rows || []).map((row, index) => ({ ...row, id: `public-row-${index}` })))
   const [workflowCollections, setWorkflowCollections] = useState(EMPTY_COLLECTIONS)
   const [activeView, setActiveView] = useState('overview')
   const [searchTerm, setSearchTerm] = useState('')
@@ -95,33 +130,50 @@ function App() {
   const [editingRecord, setEditingRecord] = useState(null)
   const [connection, setConnection] = useState('local')
   const [notice, setNotice] = useState('')
+  const [logoutPending, setLogoutPending] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(() => Boolean(readSession()?.token))
-  const [publicUpdatedAt, setPublicUpdatedAt] = useState(null)
+  const [publicUpdatedAt, setPublicUpdatedAt] = useState(() => publicCache?.updatedAt || null)
+  const [publicLoading, setPublicLoading] = useState(() => !publicCache)
+  const [publicError, setPublicError] = useState('')
   const fileInput = useRef(null)
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([apiGet('publicDashboard'), apiGet('authStatus')])
-      .then(async ([publicResponse, statusResponse]) => {
-        const publicResult = await publicResponse.json()
-        const statusResult = await statusResponse.json()
+    const loadPublicDashboard = async () => {
+      try {
+        const response = await apiGet('publicDashboard', null)
+        const result = await response.json()
+        if (!response.ok || !result.ok) throw new Error(result.error || 'Data dashboard publik gagal dimuat.')
         if (cancelled) return
-        if (publicResult.ok) {
-          setPublicRows((publicResult.summary?.rows || []).map((row, index) => ({ ...row, id: `public-row-${index}` })))
-          const publicRecords = (publicResult.summary?.groups || []).map((group, index) => ({
-            id: `public-${index}`, program: group.program, year: group.year, publicCount: group.count,
-            totalFinal: group.pagu, totalPrk: group.pagu, rabTotal: group.rab, paTotal: group.pa,
-            contractValue: group.contract, billed: group.billed, paid: group.paid,
-            prkRemaining: group.remainingPrk, contractCount: group.contractCount,
-            contractNumber: group.contract ? 'Ringkasan' : '',
-          }))
-          setRecords(publicRecords)
-          setPublicUpdatedAt(publicResult.summary?.updatedAt || new Date().toISOString())
+        const summary = result.summary || { rows: [], groups: [] }
+        setPublicRows((summary.rows || []).map((row, index) => ({ ...row, id: `public-row-${index}` })))
+        if (!readSession()?.token) setRecords(publicGroupsToRecords(summary.groups || []))
+        setPublicUpdatedAt(summary.updatedAt || new Date().toISOString())
+        writePublicDashboardCache(summary)
+        setConnection('cloud')
+        setPublicError('')
+      } catch (error) {
+        if (!cancelled) {
+          setPublicError(error.message)
+          setConnection('local')
         }
-        if (statusResult.ok) setAuthStatus(statusResult)
-        setConnection(publicResult.ok ? 'cloud' : 'local')
-        const savedSession = readSession()
-        if (!savedSession?.token) return
+      } finally {
+        if (!cancelled) setPublicLoading(false)
+      }
+    }
+    const loadAuthStatus = async () => {
+      try {
+        const response = await apiGet('authStatus', null)
+        const result = await response.json()
+        if (!cancelled && response.ok && result.ok) setAuthStatus(result)
+      } catch (error) {
+        if (!cancelled) console.warn('Status autentikasi tidak dapat dimuat.', error)
+      }
+    }
+    const loadSavedSession = async () => {
+      const savedSession = readSession()
+      if (!savedSession?.token) return
+      try {
         const [dataResponse, workflowResponse] = await Promise.all([
           apiGet('load', savedSession.token), apiGet('loadWorkflow', savedSession.token),
         ])
@@ -133,6 +185,7 @@ function App() {
           return
         }
         setAuth({ ...savedSession, user: dataResult.user || savedSession.user })
+        setAuthDataReady(true)
         setRecords(dataResult.records || [])
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify(dataResult.records || []))
         const normalizedMaterials = normalizeImportedMaterials(workflowResult.collections?.materials || [])
@@ -144,8 +197,13 @@ function App() {
           const saveResult = await saveResponse.json()
           if (saveResult.ok && !cancelled) setNotice('Harga material impor telah disesuaikan.')
         }
-      })
-      .catch(() => {})
+      } catch (error) {
+        if (!cancelled) console.warn('Sesi tersimpan tidak dapat dipulihkan.', error)
+      }
+    }
+    void loadPublicDashboard()
+    void loadAuthStatus()
+    void loadSavedSession()
     return () => { cancelled = true }
   }, [])
 
@@ -156,18 +214,20 @@ function App() {
       try {
         const response = await apiGet('publicDashboard', null)
         const result = await response.json()
-        if (!response.ok || !result.ok || cancelled) return
-        setPublicRows((result.summary?.rows || []).map((row, index) => ({ ...row, id: `public-row-${index}` })))
-        const publicRecords = (result.summary?.groups || []).map((group, index) => ({
-          id: `public-${index}`, program: group.program, year: group.year, publicCount: group.count,
-          totalFinal: group.pagu, totalPrk: group.pagu, rabTotal: group.rab, paTotal: group.pa,
-          contractValue: group.contract, billed: group.billed, paid: group.paid,
-          prkRemaining: group.remainingPrk, contractCount: group.contractCount,
-        }))
-        setRecords(publicRecords)
-        setPublicUpdatedAt(result.summary?.updatedAt || new Date().toISOString())
+        if (!response.ok || !result.ok) throw new Error(result.error || 'Data dashboard publik gagal dimuat.')
+        if (cancelled) return
+        const summary = result.summary || { rows: [], groups: [] }
+        setPublicRows((summary.rows || []).map((row, index) => ({ ...row, id: `public-row-${index}` })))
+        if (!readSession()?.token) setRecords(publicGroupsToRecords(summary.groups || []))
+        setPublicUpdatedAt(summary.updatedAt || new Date().toISOString())
+        writePublicDashboardCache(summary)
+        setPublicError('')
         setConnection('cloud')
-      } catch {}
+      } catch (error) {
+        if (!cancelled) setPublicError(error.message)
+      } finally {
+        if (!cancelled) setPublicLoading(false)
+      }
     }
     const interval = window.setInterval(refreshPublicData, 30000)
     const onVisibilityChange = () => { if (document.visibilityState === 'visible') refreshPublicData() }
@@ -184,10 +244,10 @@ function App() {
   }, [records])
 
   useEffect(() => {
-    if (!notice) return undefined
+    if (!notice || logoutPending) return undefined
     const timer = window.setTimeout(() => setNotice(''), 3600)
     return () => window.clearTimeout(timer)
-  }, [notice])
+  }, [notice, logoutPending])
 
   const years = useMemo(() => [...new Set(records.map((record) => record.year).filter(Boolean))].sort((a, b) => b - a), [records])
   const programs = useMemo(() => [...new Set(records.map((record) => record.program).filter(Boolean))].sort(), [records])
@@ -257,6 +317,35 @@ function App() {
     }
   }, [workflowCollections, records])
 
+  async function loadAuthenticatedData(session) {
+    try {
+      const [dataResponse, workflowResponse] = await Promise.all([
+        apiGet('load', session.token), apiGet('loadWorkflow', session.token),
+      ])
+      const [dataResult, workflowResult] = await Promise.all([dataResponse.json(), workflowResponse.json()])
+      if (!dataResult.ok || !workflowResult.ok) {
+        throw new Error(dataResult.error || workflowResult.error || 'Data akun gagal dimuat.')
+      }
+      if (readSession()?.token !== session.token) return
+      const nextRecords = dataResult.records || []
+      const nextCollections = { ...EMPTY_COLLECTIONS, ...workflowResult.collections }
+      setAuth((current) => current?.token === session.token
+        ? { ...session, user: dataResult.user || session.user }
+        : current)
+      setAuthDataReady(true)
+      setRecords(nextRecords)
+      setWorkflowCollections(nextCollections)
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextRecords))
+      window.localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(nextCollections))
+    } catch (error) {
+      if (readSession()?.token === session.token) {
+        setNotice(`Login berhasil, tetapi data terbaru gagal dimuat: ${error.message}`)
+      }
+    } finally {
+      if (readSession()?.token === session.token) setAuthDataLoading(false)
+    }
+  }
+
   async function submitAuth(event) {
     event.preventDefault()
     setAuthBusy(true)
@@ -272,18 +361,24 @@ function App() {
       if (!response.ok || !result.ok) throw new Error(result.error || 'Autentikasi gagal.')
       const session = { token: result.token, expiresAt: result.expiresAt, user: result.user }
       window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(session))
-      const [dataResponse, workflowResponse] = await Promise.all([apiGet('load', session.token), apiGet('loadWorkflow', session.token)])
-      const [dataResult, workflowResult] = await Promise.all([dataResponse.json(), workflowResponse.json()])
-      if (!dataResult.ok || !workflowResult.ok) throw new Error(dataResult.error || workflowResult.error || 'Data akun gagal dimuat.')
-      setAuth({ ...session, user: dataResult.user || session.user })
+      try {
+        const cachedRecords = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || 'null')
+        const cachedCollections = JSON.parse(window.localStorage.getItem(WORKFLOW_STORAGE_KEY) || 'null')
+        if (Array.isArray(cachedRecords)) setRecords(cachedRecords)
+        if (cachedCollections && typeof cachedCollections === 'object') {
+          setWorkflowCollections({ ...EMPTY_COLLECTIONS, ...cachedCollections })
+        }
+      } catch (error) {
+        console.warn('Data cache lokal tidak dapat dibaca.', error)
+      }
+      setAuth(session)
+      setLogoutPending(false)
+      setAuthDataLoading(true)
       setSidebarOpen(true)
-      setRecords(dataResult.records || [])
-      const nextCollections = { ...EMPTY_COLLECTIONS, ...workflowResult.collections }
-      setWorkflowCollections(nextCollections)
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(dataResult.records || []))
-      window.localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(nextCollections))
       setAuthDialog('')
       setActiveView('overview')
+      setNotice('Login berhasil. Data terbaru dimuat di latar belakang.')
+      void loadAuthenticatedData(session)
     } catch (error) {
       window.sessionStorage.removeItem(SESSION_KEY)
       setAuthMessage(error.message)
@@ -292,16 +387,31 @@ function App() {
     }
   }
 
-  async function logout() {
-    try { await apiPost({ action: 'logout' }) } catch {}
+  function logout() {
+    const logoutRequest = apiPost({ action: 'logout' })
     window.sessionStorage.removeItem(SESSION_KEY)
     window.localStorage.removeItem(STORAGE_KEY)
     window.localStorage.removeItem(WORKFLOW_STORAGE_KEY)
     setAuth(null)
+    setAuthDataReady(false)
     setSidebarOpen(false)
     setRecords(sampleRecords)
     setWorkflowCollections(EMPTY_COLLECTIONS)
     setActiveView('overview')
+    setLogoutPending(true)
+    setNotice('Anda sudah keluar. Sedang mengakhiri sesi di server...')
+    void logoutRequest
+      .then(async (response) => {
+        const result = await response.json()
+        if (!response.ok || !result.ok) throw new Error(result.error || 'Sesi server belum dapat diakhiri.')
+        setLogoutPending(false)
+        if (!readSession()?.token) setNotice('Anda sudah keluar.')
+      })
+      .catch((error) => {
+        console.warn('Logout server gagal.', error)
+        setLogoutPending(false)
+        if (!readSession()?.token) setNotice(`Anda sudah keluar dari perangkat ini, tetapi sesi server belum diakhiri: ${error.message}`)
+      })
   }
 
   async function saveRecords(nextRecords, successMessage) {
@@ -496,7 +606,7 @@ function App() {
     overview: 'Dashboard', data: 'Rekap RAB', materials: 'Input Material', activityCatalog: 'Master Kegiatan', components: 'RAB Komponen',
     activities: 'RAB Kegiatan', paFinalization: 'Finalisasi ke PA', contracts: 'Data Kontrak', users: 'Manajemen User', materialRecap: 'Rekap Material', realizations: 'Realisasi',
   }[activeView] || 'Dashboard'
-  const canEdit = Boolean(auth && auth.user.role !== 'viewer')
+  const canEdit = Boolean(auth && auth.user.role !== 'viewer' && authDataReady && !authDataLoading)
   const isAdmin = auth?.user.role === 'admin'
   const dashboardRecordCount = auth
     ? dashboardRecords.length
@@ -544,7 +654,7 @@ function App() {
         </header>
 
         <div className="page-content">
-          {activeView === 'overview' && !auth ? <PublicDashboard groups={dashboardRecords} rows={publicRows} selectedYear={selectedYear} setSelectedYear={setSelectedYear} updatedAt={publicUpdatedAt} connection={connection} /> : activeView === 'overview' ? <>
+          {activeView === 'overview' && !auth ? <PublicDashboard groups={dashboardRecords} rows={publicRows} selectedYear={selectedYear} setSelectedYear={setSelectedYear} updatedAt={publicUpdatedAt} connection={connection} loading={publicLoading} error={publicError} /> : activeView === 'overview' ? <>
             <section className="page-heading"><div><p className="eyebrow">DASHBOARD RAB</p><h1>Dashboard</h1><p className="heading-subtitle">Rekap anggaran investasi dan realisasi per program.</p></div>
               <div className="filter-pair"><label className="select-wrap"><span className="sr-only">Filter tahun</span><select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}><option value="all">Semua tahun</option>{years.map((year) => <option key={year} value={String(year)}>{year}</option>)}</select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter program</span><select value={selectedProgram} onChange={(event) => setSelectedProgram(event.target.value)}><option value="all">Semua program</option>{programs.map((program) => <option key={program} value={program}>{program}</option>)}</select><ChevronDown size={15} /></label></div>
             </section>
@@ -619,7 +729,7 @@ function App() {
       {editingRecord && canEdit && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditingRecord(null) }}><section className="modal contract-modal" role="dialog" aria-modal="true" aria-labelledby="contract-title"><div className="modal-heading"><div><p className="eyebrow">INPUT DATA KONTRAK</p><h2 id="contract-title">Lengkapi data pemenang</h2><p className="modal-project-name">{editingRecord.description}</p></div><button className="icon-button" aria-label="Tutup" onClick={() => setEditingRecord(null)}><X size={19} /></button></div>
         <form onSubmit={saveContract}><label className="field-label">Nomor kontrak<input name="contractNumber" defaultValue={editingRecord.contractNumber} placeholder="Masukkan nomor kontrak" /></label><label className="field-label">Vendor pemenang<input name="vendor" defaultValue={editingRecord.vendor} placeholder="Masukkan nama vendor pemenang" /></label><label className="field-label">Nilai kontrak aktual (Rp)<input name="contractValue" type="number" min="0" step="1" defaultValue={editingRecord.contractValue || ''} placeholder="0" /></label><p className="form-note"><CircleAlert size={15} /> Nilai kontrak mengikuti dokumen kontrak; nilai PA tetap menjadi alokasi/pagu. Input ini untuk pencatatan, bukan penerbitan kontrak.</p><div className="modal-actions"><button type="button" className="button button-secondary" onClick={() => setEditingRecord(null)}>Batal</button><button type="submit" className="button button-primary"><Check size={16} />Simpan data</button></div></form>
       </section></div>}
-      {notice && <div className="toast" role="status"><Check size={16} />{notice}</div>}
+      {notice && <div className="toast" role="status">{logoutPending ? <LoaderCircle className="toast-progress" size={16} /> : <Check size={16} />}{notice}</div>}
     </div>
   )
 }
@@ -684,7 +794,7 @@ function PublicProgramCard({ card, selectedYear }) {
   </article>
 }
 
-function PublicDashboard({ rows, selectedYear, setSelectedYear, updatedAt, connection }) {
+function PublicDashboard({ rows, selectedYear, setSelectedYear, updatedAt, connection, loading, error }) {
   const [programFilter, setProgramFilter] = useState('all')
   const [notesFilter, setNotesFilter] = useState('all')
   const publicYears = ['2024', '2025', '2026', '2027', '2028', '2029', '2030']
@@ -770,10 +880,10 @@ function PublicDashboard({ rows, selectedYear, setSelectedYear, updatedAt, conne
     </section>
 
     <section className="public-dashboard-table panel">
-      <div className="public-table-heading"><div><p className="eyebrow">SINKRON DARI RABDATA</p><h2>Data dashboard per PRK</h2></div><span className={`public-live-status ${connection === 'cloud' ? 'is-live' : ''}`}><i />{connection === 'cloud' ? `Diperbarui ${updatedLabel} · refresh 30 detik` : 'Menunggu koneksi Google Sheets'}</span></div>
+      <div className="public-table-heading"><div><p className="eyebrow">SINKRON DARI RABDATA</p><h2>Data dashboard per PRK</h2></div><span className={`public-live-status ${connection === 'cloud' ? 'is-live' : ''}`}><i />{loading ? 'Memuat data Google Sheets...' : error ? 'Koneksi Google Sheets bermasalah' : connection === 'cloud' ? `Diperbarui ${updatedLabel} · refresh 30 detik` : 'Menunggu koneksi Google Sheets'}</span></div>
       <div className="table-scroll public-summary-scroll"><table><thead><tr><th>NO</th><th>NO. PRK</th><th>URAIAN</th><th>PROGRAM</th><th>TAHUN</th><th>KETERANGAN</th><th>TOTAL AKHIR</th><th>RAB</th><th>TOTAL PA</th><th>KONTRAK</th><th>SISA PRK</th><th>TAGIHAN</th><th>TOTAL BAYAR</th><th>BELUM TERBAYAR</th></tr></thead><tbody>
         {filteredRows.map((row, index) => <tr key={row.id}><td>{index + 1}</td><td>{row.prk || '-'}</td><td className="public-description-cell" title={row.description}>{row.description || '-'}</td><td>{row.program || '-'}</td><td>{row.year || '-'}</td><td>{notesCategory(row) || '-'}</td><td className="money-cell">{formatCurrency(row.totalFinal)}</td><td className="money-cell">{formatCurrency(row.rabTotal)}</td><td className="money-cell">{formatCurrency(row.paTotal)}</td><td className="money-cell">{formatCurrency(row.contractValue)}</td><td className="money-cell">{formatCurrency(row.prkRemaining)}</td><td className="money-cell">{formatCurrency(row.billed)}</td><td className="money-cell">{formatCurrency(row.paid)}</td><td className="money-cell">{formatCurrency(Math.max(0, Number(row.billed || 0) - Number(row.paid || 0)))}</td></tr>)}
-        {!filteredRows.length && <tr><td colSpan="14">Belum ada data untuk filter ini.</td></tr>}
+        {!filteredRows.length && <tr><td colSpan="14">{loading ? 'Sedang mengambil data dashboard...' : error ? error : 'Belum ada data untuk filter ini.'}</td></tr>}
       </tbody></table></div>
       <div className="public-table-footer"><span>Menampilkan {filteredRows.length} dari {rows.length} baris PRK</span><span>Nomor kontrak dan vendor hanya tersedia setelah login.</span></div>
     </section>

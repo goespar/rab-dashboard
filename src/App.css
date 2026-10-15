@@ -318,11 +318,13 @@ tr:hover .contract-value svg, .contract-value:focus-visible svg { opacity: 1; }
 .form-note svg { flex: none; color: #c18459; }
 .toast { position: fixed; z-index: 60; right: 25px; bottom: 24px; display: flex; max-width: min(430px, calc(100vw - 32px)); align-items: center; gap: 9px; padding: 12px 15px; border: 1px solid #dce5d9; border-radius: 5px; color: #304633; background: #fff; box-shadow: 0 8px 25px rgba(36,56,40,.13); font-size: 10px; animation: rise-in .2s ease; }
 .toast svg { flex: none; color: #51805c; }
+.toast .toast-progress { animation: spin .9s linear infinite; }
 .mobile-menu, .sidebar-close, .sidebar-scrim { display: none; }
 .sr-only { position: absolute; top: 0; left: 0; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; clip-path: inset(50%); }
 @keyframes rise-in { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes modal-in { from { opacity: 0; transform: translateY(6px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 1180px) {
   .app-shell { --sidebar-width: 215px; }
