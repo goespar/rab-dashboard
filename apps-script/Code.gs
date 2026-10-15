@@ -65,6 +65,7 @@ const DATA_HEADERS = [
   'URAIAN', 'TOTAL PRK', 'RELOKASI', 'REVISI SKKI', 'TOTAL AKHIR', 'TOTAL RAB', 'TOTAL PA',
   'NOKONTRAK', 'VENDOR', 'NILAI KONTRAK', 'PENGEMBALIAN PA', 'PENGGANTIAN BIAYA', 'TAGIHAN',
   'TOTAL BAYAR', 'SISA PRK', 'PROGRAM', 'TAHUN ANGGARAN', 'KETERANGAN', 'POS ANGGARAN', 'RECORD ID',
+  'TANGGAL AWAL', 'TANGGAL AKHIR', 'RENCANA KONTRAK', 'RENCANA TAGIH', 'PROGRESS', 'PROYEKSI TAGIH', 'TANGGAL BAYAR',
 ]
 
 const CLIENT_KEYS = {
@@ -76,6 +77,9 @@ const CLIENT_KEYS = {
   'PENGEMBALIAN PA': 'paReturn', 'PENGGANTIAN BIAYA': 'costReplacement', 'TAGIHAN': 'billed',
   'TOTAL BAYAR': 'paid', 'SISA PRK': 'prkRemaining', 'PROGRAM': 'program',
   'TAHUN ANGGARAN': 'year', 'KETERANGAN': 'notes', 'RECORD ID': 'id',
+  'TANGGAL AWAL': 'startDate', 'TANGGAL AKHIR': 'endDate',
+  'RENCANA KONTRAK': 'plannedContract', 'RENCANA TAGIH': 'plannedBilling',
+  'PROGRESS': 'progress', 'PROYEKSI TAGIH': 'projectedBilling', 'TANGGAL BAYAR': 'paymentDate',
 }
 
 function doGet(event) {
@@ -124,18 +128,23 @@ function doPost(event) {
     }
     if (payload.records.length > 5000) return json_({ ok: false, error: 'Maksimum 5.000 baris per jenis data.' })
     const updatedRecords = saveWorkflow_(payload.collection, payload.records)
+    clearPublicDashboardCache_()
     return json_({ ok: true, collection: payload.collection, rows: payload.records.length, updatedRecords: updatedRecords || [] })
   }
   if (payload.action === 'transferToPA') {
     try {
-      return json_({ ok: true, ...transferToPA_(payload) })
+      const result = transferToPA_(payload)
+      clearPublicDashboardCache_()
+      return json_({ ok: true, ...result })
     } catch (error) {
       return json_({ ok: false, error: error.message || 'Finalisasi ke PA gagal.' })
     }
   }
   if (payload.action === 'cancelTransferToPA') {
     try {
-      return json_({ ok: true, ...cancelTransferToPA_(payload) })
+      const result = cancelTransferToPA_(payload)
+      clearPublicDashboardCache_()
+      return json_({ ok: true, ...result })
     } catch (error) {
       return json_({ ok: false, error: error.message || 'Pembatalan finalisasi gagal.' })
     }
@@ -155,6 +164,7 @@ function doPost(event) {
     sheet.clearContents()
     sheet.getRange(1, 1, 1, DATA_HEADERS.length).setValues([DATA_HEADERS])
     if (rows.length) sheet.getRange(2, 1, rows.length, DATA_HEADERS.length).setValues(rows)
+    clearPublicDashboardCache_()
     return json_({ ok: true, rows: rows.length, updatedAt: new Date().toISOString() })
   } finally {
     lock.releaseLock()
@@ -167,8 +177,22 @@ function getDataSheet_() {
   if (!spreadsheet) throw new Error('Atur Script Property SPREADSHEET_ID terlebih dahulu.')
   let sheet = spreadsheet.getSheetByName(DATA_SHEET_NAME)
   if (!sheet) sheet = spreadsheet.insertSheet(DATA_SHEET_NAME)
-  if (sheet.getLastRow() === 0) sheet.getRange(1, 1, 1, DATA_HEADERS.length).setValues([DATA_HEADERS])
+  ensureDataHeaders_(sheet)
   return sheet
+}
+
+function ensureDataHeaders_(sheet) {
+  const values = sheet.getDataRange().getValues()
+  if (!values.length) {
+    sheet.getRange(1, 1, 1, DATA_HEADERS.length).setValues([DATA_HEADERS])
+    return
+  }
+  const headers = values[0] || []
+  const existingHeaders = new Set(headers.map((header) => String(header || '').trim()).filter(Boolean))
+  const missingHeaders = DATA_HEADERS.filter((header) => !existingHeaders.has(header))
+  if (!missingHeaders.length) return
+  const lastHeaderColumn = headers.reduce((last, header, index) => String(header || '').trim() ? index + 1 : last, 0)
+  sheet.getRange(1, lastHeaderColumn + 1, 1, missingHeaders.length).setValues([missingHeaders])
 }
 
 function toClientRecord_(row) {
@@ -257,6 +281,10 @@ function cachedPublicDashboard_() {
     return summary
   }
   return publicDashboard_()
+}
+
+function clearPublicDashboardCache_() {
+  if (typeof CacheService !== 'undefined') CacheService.getScriptCache().remove(PUBLIC_DASHBOARD_CACHE_KEY)
 }
 
 function hashPassword_(password, salt) {
@@ -588,9 +616,11 @@ function publicDashboard_() {
     prk: column('NO.PRK'), description: column('URAIAN'), program: column('PROGRAM'), year: column('TAHUN ANGGARAN'), notes: column('KETERANGAN'),
     pagu: column('TOTAL AKHIR'), totalPrk: column('TOTAL PRK'), pa: column('TOTAL PA'), rab: column('TOTAL RAB'),
     contract: column('NILAI KONTRAK'), billed: column('TAGIHAN'), paid: column('TOTAL BAYAR'), remainingPrk: column('SISA PRK'),
+    projectedBilling: column('PROYEKSI TAGIH'),
   }
   const groups = new Map()
-  const rows = values.filter((row) => row.some((cell) => cell !== '')).map((row) => {
+  const rows = values.filter((row) => row.some((cell) => cell !== '')
+    && indexes.pagu >= 0 && Number(row[indexes.pagu]) > 0).map((row) => {
     const value = (index) => index >= 0 ? row[index] : ''
     const number = (index) => index >= 0 ? Number(row[index]) || 0 : 0
     return {
@@ -600,21 +630,23 @@ function publicDashboard_() {
       rabTotal: number(indexes.rab), paTotal: number(indexes.pa), contractValue: number(indexes.contract),
       billed: number(indexes.billed), paid: number(indexes.paid),
       prkRemaining: number(indexes.pagu) - number(indexes.rab) - number(indexes.pa),
+      projectedBilling: number(indexes.projectedBilling),
     }
   }).filter((record) => record.prk.trim())
   rows.forEach((record) => {
     const program = record.program
     const year = record.year
     const key = `${program}::${year}`
-    const group = groups.get(key) || { program, year, count: 0, pagu: 0, rab: 0, pa: 0, contract: 0, billed: 0, paid: 0, remainingPrk: 0, contractCount: 0 }
+    const group = groups.get(key) || { program, year, count: 0, pagu: 0, rab: 0, pa: 0, contract: 0, billed: 0, paid: 0, remainingPrk: 0, projectedBilling: 0, contractCount: 0 }
     group.count += 1
-    group.pagu += record.totalFinal || record.totalPrk
+    group.pagu += record.totalFinal
     group.rab += record.rabTotal
     group.pa += record.paTotal
     group.contract += record.contractValue
     group.billed += record.billed
     group.paid += record.paid
     group.remainingPrk += record.prkRemaining
+    group.projectedBilling += record.projectedBilling
     if (record.contractValue > 0) group.contractCount += 1
     groups.set(key, group)
   })
