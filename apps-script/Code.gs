@@ -4,6 +4,8 @@ const SESSIONS_SHEET_NAME = 'SESSIONS'
 const SESSION_HOURS = 8
 const AUTH_USERS_CACHE_KEY = 'rab-auth-users-v1'
 const AUTH_USERS_CACHE_SECONDS = 15
+const PUBLIC_DASHBOARD_CACHE_KEY = 'rab-public-dashboard-v1'
+const PUBLIC_DASHBOARD_CACHE_SECONDS = 20
 const SHA256_K_ = [
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
   0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -80,7 +82,7 @@ function doGet(event) {
   const action = event && event.parameter && event.parameter.action
   if (action === 'health') return json_({ ok: true, service: 'RAB Monitor' })
   if (action === 'authStatus') return json_({ ok: true, ...authStatus_() })
-  if (action === 'publicDashboard') return json_({ ok: true, summary: publicDashboard_() })
+  if (action === 'publicDashboard') return json_({ ok: true, summary: cachedPublicDashboard_() })
   if (action !== 'loadWorkflow' && action !== 'load') return json_({ ok: false, error: 'Aksi tidak dikenal.' })
   const authorization = authorize_(event.parameter.token)
   if (!authorization.ok) return json_({ ok: false, error: authorization.error, code: 'AUTH_REQUIRED' })
@@ -245,12 +247,136 @@ function clearAuthUsersCache_() {
   if (typeof CacheService !== 'undefined') CacheService.getScriptCache().remove(AUTH_USERS_CACHE_KEY)
 }
 
+function cachedPublicDashboard_() {
+  if (typeof CacheService !== 'undefined') {
+    const cache = CacheService.getScriptCache()
+    const cached = cache.get(PUBLIC_DASHBOARD_CACHE_KEY)
+    if (cached) return JSON.parse(cached)
+    const summary = publicDashboard_()
+    cache.put(PUBLIC_DASHBOARD_CACHE_KEY, JSON.stringify(summary), PUBLIC_DASHBOARD_CACHE_SECONDS)
+    return summary
+  }
+  return publicDashboard_()
+}
+
 function hashPassword_(password, salt) {
   let digest = salt + ':' + password
+  const saltContext = createSha256SaltContext_(salt)
   for (let index = 0; index < 10000; index += 1) {
-    digest = sha256Hex_(digest) + salt
+    const hashed = index === 0
+      ? sha256Hex_(digest)
+      : saltContext ? sha256HexWithSalt_(digest, saltContext) : sha256Hex_(digest)
+    digest = hashed + salt
   }
   return digest.slice(0, 64)
+}
+
+function createSha256SaltContext_(salt) {
+  if (salt.length !== 72) return null
+  for (let index = 0; index < salt.length; index += 1) {
+    if (salt.charCodeAt(index) > 0x7f) return null
+  }
+
+  const saltBlock = new Uint32Array(64)
+  for (let index = 0; index < 16; index += 1) {
+    const offset = index * 4
+    saltBlock[index] = ((salt.charCodeAt(offset) << 24)
+      | (salt.charCodeAt(offset + 1) << 16)
+      | (salt.charCodeAt(offset + 2) << 8)
+      | salt.charCodeAt(offset + 3)) >>> 0
+  }
+  expandSha256Schedule_(saltBlock)
+
+  const tailBlock = new Uint32Array(64)
+  tailBlock[0] = ((salt.charCodeAt(64) << 24)
+    | (salt.charCodeAt(65) << 16)
+    | (salt.charCodeAt(66) << 8)
+    | salt.charCodeAt(67)) >>> 0
+  tailBlock[1] = ((salt.charCodeAt(68) << 24)
+    | (salt.charCodeAt(69) << 16)
+    | (salt.charCodeAt(70) << 8)
+    | salt.charCodeAt(71)) >>> 0
+  tailBlock[2] = 0x80000000
+  tailBlock[15] = 1088
+  expandSha256Schedule_(tailBlock)
+
+  return {
+    saltBlock,
+    tailBlock,
+    firstBlock: new Uint32Array(64),
+    state: new Uint32Array(8),
+  }
+}
+
+function sha256HexWithSalt_(digest, context) {
+  const { saltBlock, tailBlock, firstBlock, state } = context
+  state[0] = 0x6a09e667
+  state[1] = 0xbb67ae85
+  state[2] = 0x3c6ef372
+  state[3] = 0xa54ff53a
+  state[4] = 0x510e527f
+  state[5] = 0x9b05688c
+  state[6] = 0x1f83d9ab
+  state[7] = 0x5be0cd19
+  for (let index = 0; index < 16; index += 1) firstBlock[index] = 0
+  for (let index = 0; index < 16; index += 1) {
+    const offset = index * 4
+    firstBlock[index] = ((digest.charCodeAt(offset) << 24)
+      | (digest.charCodeAt(offset + 1) << 16)
+      | (digest.charCodeAt(offset + 2) << 8)
+      | digest.charCodeAt(offset + 3)) >>> 0
+  }
+  expandSha256Schedule_(firstBlock)
+  compressSha256Block_(state, firstBlock)
+  compressSha256Block_(state, saltBlock)
+  compressSha256Block_(state, tailBlock)
+
+  let result = ''
+  for (let index = 0; index < state.length; index += 1) {
+    result += ('00000000' + state[index].toString(16)).slice(-8)
+  }
+  return result
+}
+
+function expandSha256Schedule_(words) {
+  const rotateRight = (word, amount) => (word >>> amount) | (word << (32 - amount))
+  for (let index = 16; index < 64; index += 1) {
+    const left = words[index - 15]
+    const right = words[index - 2]
+    const smallSigma0 = rotateRight(left, 7) ^ rotateRight(left, 18) ^ (left >>> 3)
+    const smallSigma1 = rotateRight(right, 17) ^ rotateRight(right, 19) ^ (right >>> 10)
+    words[index] = (words[index - 16] + smallSigma0 + words[index - 7] + smallSigma1) >>> 0
+  }
+}
+
+function compressSha256Block_(state, words) {
+  let a = state[0], b = state[1], c = state[2], d = state[3]
+  let e = state[4], f = state[5], g = state[6], h = state[7]
+  const rotateRight = (word, amount) => (word >>> amount) | (word << (32 - amount))
+  for (let index = 0; index < 64; index += 1) {
+    const bigSigma1 = rotateRight(e, 6) ^ rotateRight(e, 11) ^ rotateRight(e, 25)
+    const choice = (e & f) ^ (~e & g)
+    const temp1 = (h + bigSigma1 + choice + SHA256_K_[index] + words[index]) >>> 0
+    const bigSigma0 = rotateRight(a, 2) ^ rotateRight(a, 13) ^ rotateRight(a, 22)
+    const majority = (a & b) ^ (a & c) ^ (b & c)
+    const temp2 = (bigSigma0 + majority) >>> 0
+    h = g
+    g = f
+    f = e
+    e = (d + temp1) >>> 0
+    d = c
+    c = b
+    b = a
+    a = (temp1 + temp2) >>> 0
+  }
+  state[0] = (state[0] + a) >>> 0
+  state[1] = (state[1] + b) >>> 0
+  state[2] = (state[2] + c) >>> 0
+  state[3] = (state[3] + d) >>> 0
+  state[4] = (state[4] + e) >>> 0
+  state[5] = (state[5] + f) >>> 0
+  state[6] = (state[6] + g) >>> 0
+  state[7] = (state[7] + h) >>> 0
 }
 
 function sha256Hex_(value) {

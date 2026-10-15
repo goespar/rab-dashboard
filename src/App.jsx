@@ -37,8 +37,7 @@ function readSession() {
 function readPublicDashboardCache() {
   try {
     const cached = JSON.parse(window.localStorage.getItem(PUBLIC_CACHE_KEY) || 'null')
-    const isFresh = cached && Date.now() - cached.cachedAt < 30000
-    return isFresh && Array.isArray(cached.summary?.rows) && Array.isArray(cached.summary?.groups)
+    return cached?.summary && Array.isArray(cached.summary.rows) && Array.isArray(cached.summary.groups)
       ? cached.summary
       : null
   } catch (error) {
@@ -49,7 +48,7 @@ function readPublicDashboardCache() {
 
 function writePublicDashboardCache(summary) {
   try {
-    window.localStorage.setItem(PUBLIC_CACHE_KEY, JSON.stringify({ cachedAt: Date.now(), summary }))
+    window.localStorage.setItem(PUBLIC_CACHE_KEY, JSON.stringify({ summary }))
   } catch (error) {
     console.warn('Cache dashboard publik tidak dapat disimpan.', error)
   }
@@ -133,7 +132,7 @@ function App() {
   const [logoutPending, setLogoutPending] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(() => Boolean(readSession()?.token))
   const [publicUpdatedAt, setPublicUpdatedAt] = useState(() => publicCache?.updatedAt || null)
-  const [publicLoading, setPublicLoading] = useState(() => !publicCache)
+  const [publicLoading, setPublicLoading] = useState(true)
   const [publicError, setPublicError] = useState('')
   const fileInput = useRef(null)
 
@@ -880,7 +879,7 @@ function PublicDashboard({ rows, selectedYear, setSelectedYear, updatedAt, conne
     </section>
 
     <section className="public-dashboard-table panel">
-      <div className="public-table-heading"><div><p className="eyebrow">SINKRON DARI RABDATA</p><h2>Data dashboard per PRK</h2></div><span className={`public-live-status ${connection === 'cloud' ? 'is-live' : ''}`}><i />{loading ? 'Memuat data Google Sheets...' : error ? 'Koneksi Google Sheets bermasalah' : connection === 'cloud' ? `Diperbarui ${updatedLabel} · refresh 30 detik` : 'Menunggu koneksi Google Sheets'}</span></div>
+      <div className="public-table-heading"><div><p className="eyebrow">SINKRON DARI RABDATA</p><h2>Data dashboard per PRK</h2></div><span className={`public-live-status ${connection === 'cloud' ? 'is-live' : ''}`}><i />{loading ? rows.length ? 'Data tersimpan · memuat pembaruan...' : 'Memuat data Google Sheets...' : error ? rows.length ? 'Koneksi lambat · menampilkan data tersimpan' : 'Koneksi Google Sheets bermasalah' : connection === 'cloud' ? `Diperbarui ${updatedLabel} · refresh 30 detik` : 'Menunggu koneksi Google Sheets'}</span></div>
       <div className="table-scroll public-summary-scroll"><table><thead><tr><th>NO</th><th>NO. PRK</th><th>URAIAN</th><th>PROGRAM</th><th>TAHUN</th><th>KETERANGAN</th><th>TOTAL AKHIR</th><th>RAB</th><th>TOTAL PA</th><th>KONTRAK</th><th>SISA PRK</th><th>TAGIHAN</th><th>TOTAL BAYAR</th><th>BELUM TERBAYAR</th></tr></thead><tbody>
         {filteredRows.map((row, index) => <tr key={row.id}><td>{index + 1}</td><td>{row.prk || '-'}</td><td className="public-description-cell" title={row.description}>{row.description || '-'}</td><td>{row.program || '-'}</td><td>{row.year || '-'}</td><td>{notesCategory(row) || '-'}</td><td className="money-cell">{formatCurrency(row.totalFinal)}</td><td className="money-cell">{formatCurrency(row.rabTotal)}</td><td className="money-cell">{formatCurrency(row.paTotal)}</td><td className="money-cell">{formatCurrency(row.contractValue)}</td><td className="money-cell">{formatCurrency(row.prkRemaining)}</td><td className="money-cell">{formatCurrency(row.billed)}</td><td className="money-cell">{formatCurrency(row.paid)}</td><td className="money-cell">{formatCurrency(Math.max(0, Number(row.billed || 0) - Number(row.paid || 0)))}</td></tr>)}
         {!filteredRows.length && <tr><td colSpan="14">{loading ? 'Sedang mengambil data dashboard...' : error ? error : 'Belum ada data untuk filter ini.'}</td></tr>}

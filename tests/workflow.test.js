@@ -430,6 +430,17 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
 
   assert.equal(context.sha256Hex_('abc'), createHash('sha256').update('abc').digest('hex'))
   assert.equal(context.sha256Hex_('kata sandi 🔐'), createHash('sha256').update('kata sandi 🔐').digest('hex'))
+  const testSalt = 'a'.repeat(72)
+  const testDigest = createHash('sha256').update('starting digest').digest('hex')
+  const saltContext = context.createSha256SaltContext_(testSalt)
+  assert.equal(context.sha256HexWithSalt_(testDigest, saltContext), createHash('sha256').update(testDigest + testSalt).digest('hex'))
+  assert.equal(context.sha256HexWithSalt_(testDigest, saltContext), createHash('sha256').update(testDigest + testSalt).digest('hex'))
+  const uuidSalt = '12345678-1234-1234-1234-123456789012'.repeat(2)
+  let expectedPasswordHash = `${uuidSalt}:legacy-password-test`
+  for (let index = 0; index < 10000; index += 1) {
+    expectedPasswordHash = createHash('sha256').update(expectedPasswordHash, 'utf8').digest('hex') + uuidSalt
+  }
+  assert.equal(context.hashPassword_('legacy-password-test', uuidSalt), expectedPasswordHash.slice(0, 64))
   const publicResponse = JSON.parse(context.doGet({ parameter: { action: 'publicDashboard' } }).text)
   assert.equal(publicResponse.ok, true)
   assert.equal(publicResponse.summary.groups[0].pagu, 1000)
@@ -448,6 +459,12 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
   assert.equal('records' in publicResponse, false)
   assert.equal('prk' in publicResponse.summary.groups[0], false)
   assert.equal('description' in publicResponse.summary.groups[0], false)
+  assert.equal(authCache.has('rab-public-dashboard-v1'), true)
+  const computePublicDashboard = context.publicDashboard_
+  context.publicDashboard_ = () => { throw new Error('Cached dashboard summary should be reused.') }
+  const cachedPublicResponse = JSON.parse(context.doGet({ parameter: { action: 'publicDashboard' } }).text)
+  assert.equal(cachedPublicResponse.summary.rows.length, publicResponse.summary.rows.length)
+  context.publicDashboard_ = computePublicDashboard
 
   const initialStatus = JSON.parse(context.doGet({ parameter: { action: 'authStatus' } }).text)
   assert.equal(initialStatus.setupRequired, true)
