@@ -5,6 +5,7 @@ export const HEADERS = [
   'URAIAN', 'TOTAL PRK', 'RELOKASI', 'REVISI SKKI', 'TOTAL AKHIR', 'TOTAL RAB', 'TOTAL PA',
   'NOKONTRAK', 'VENDOR', 'NILAI KONTRAK', 'PENGEMBALIAN PA', 'PENGGANTIAN BIAYA', 'TAGIHAN',
   'TOTAL BAYAR', 'SISA PRK', 'PROGRAM', 'TAHUN ANGGARAN', 'KETERANGAN', 'POS ANGGARAN',
+  'TANGGAL AWAL', 'TANGGAL AKHIR', 'RENCANA KONTRAK', 'RENCANA TAGIH', 'PROGRESS', 'PROYEKSI TAGIH', 'TANGGAL BAYAR',
 ]
 
 const COLUMN_KEYS = {
@@ -14,10 +15,24 @@ const COLUMN_KEYS = {
   'TOTAL RAB': 'rabTotal', 'TOTAL PA': 'paTotal', NOKONTRAK: 'contractNumber', VENDOR: 'vendor',
   'NILAI KONTRAK': 'contractValue', 'PENGEMBALIAN PA': 'paReturn', 'PENGGANTIAN BIAYA': 'costReplacement',
   TAGIHAN: 'billed', 'TOTAL BAYAR': 'paid', 'SISA PRK': 'prkRemaining', PROGRAM: 'program',
-  'TAHUN ANGGARAN': 'year', KETERANGAN: 'notes',
+  'TAHUN ANGGARAN': 'year', KETERANGAN: 'notes', 'TANGGAL AWAL': 'startDate',
+  'TANGGAL AKHIR': 'endDate', 'RENCANA KONTRAK': 'plannedContract', 'RENCANA TAGIH': 'plannedBilling',
+  PROGRESS: 'progress', 'PROYEKSI TAGIH': 'projectedBilling', 'TANGGAL BAYAR': 'paymentDate',
 }
 
-const NUMERIC_KEYS = new Set(['totalPrk', 'relocation', 'skkiRevision', 'totalFinal', 'rabTotal', 'paTotal', 'contractValue', 'paReturn', 'costReplacement', 'billed', 'paid', 'prkRemaining', 'year'])
+const NUMERIC_KEYS = new Set(['totalPrk', 'relocation', 'skkiRevision', 'totalFinal', 'rabTotal', 'paTotal', 'contractValue', 'paReturn', 'costReplacement', 'billed', 'paid', 'prkRemaining', 'plannedContract', 'plannedBilling', 'projectedBilling', 'year'])
+const DATE_KEYS = new Set(['startDate', 'endDate', 'paymentDate'])
+
+function normalizeDate(value) {
+  if (value instanceof Date) {
+    if (!Number.isFinite(value.getTime())) return ''
+    const year = value.getFullYear()
+    const month = String(value.getMonth() + 1).padStart(2, '0')
+    const day = String(value.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+  return String(value ?? '').trim()
+}
 
 export const sampleRecords = []
 
@@ -83,7 +98,10 @@ function normalizeRecord(row, headerRow, sheetName, rowIndex) {
   headerRow.forEach((header, index) => {
     const key = COLUMN_KEYS[String(header ?? '').trim().toUpperCase()]
     if (!key) return
-    record[key] = NUMERIC_KEYS.has(key) ? toNumber(row[index]) : String(row[index] ?? '').trim()
+    const value = row[index]
+    if (DATE_KEYS.has(key)) record[key] = normalizeDate(value)
+    else if (NUMERIC_KEYS.has(key) && key === 'totalFinal' && (value === '' || value === null || value === undefined)) record[key] = ''
+    else record[key] = NUMERIC_KEYS.has(key) ? toNumber(value) : String(value ?? '').trim()
   })
   record.id = `${normalizedHeader(sheetName)}-row-${rowIndex + 1}`
   record.program = record.program || 'Lainnya'

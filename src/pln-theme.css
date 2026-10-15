@@ -45,6 +45,10 @@
 .button-secondary:hover { background: #f3f8fc; }
 .eyebrow { color: #73829b; }
 .page-heading h1 { color: #17253b; font-family: 'DM Sans', 'Aptos', sans-serif; font-size: 29px; font-weight: 700; }
+.dashboard-heading .eyebrow { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--pln-blue); font-size: 10px; letter-spacing: 1.2px; }
+.dashboard-heading .eyebrow::before { width: 17px; height: 2px; background: var(--pln-cyan); content: ''; }
+.dashboard-heading h1 { color: var(--pln-navy); font-size: 32px; font-weight: 750; line-height: 1.12; }
+.dashboard-heading .heading-subtitle { margin-top: 7px; color: #65758b; font-size: 13px; line-height: 1.5; }
 .heading-subtitle { color: #728098; }
 .select-wrap select { border-color: #d8e1ed; color: #33435b; }
 .select-wrap svg { color: #73829b; }
@@ -141,6 +145,7 @@ td, .workflow-table-scroll td { font-size: 13px; }
 .workflow-overview-grid strong { font-size: 17px; }
 
 @media (max-width: 680px) {
+  .dashboard-heading h1 { font-size: 28px; }
   .workflow-stepbar span { font-size: 11px; }
   .workflow-heading p:last-child { font-size: 13px; }
   .workflow-summary > div { font-size: 11px; }

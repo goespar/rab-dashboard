@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { exportWorkbook, formatCurrency, importWorkbook, parseRupiahPrice, sampleRecords } from './lib/workbook.js'
+import { summarizePublicDashboard } from './lib/publicDashboard.js'
 import RabWorkflow from './RabWorkflow.jsx'
 import './App.css'
 import './pln-theme.css'
@@ -14,6 +15,7 @@ const STORAGE_KEY = 'rab-monitor-records-v1'
 const WORKFLOW_STORAGE_KEY = 'rab-monitor-workflow-v1'
 const PUBLIC_CACHE_KEY = 'rab-monitor-public-dashboard-v1'
 const SESSION_KEY = 'rab-monitor-session-v1'
+const YEAR_OPTIONS = ['2024', '2025', '2026', '2027', '2028', '2029', '2030']
 const EMPTY_COLLECTIONS = { materials: [], activityCatalog: [], components: [], activities: [], paTransfers: [], materialRecap: [], realizations: [] }
 const WORKFLOW_NAV = [
   { id: 'materials', label: 'Input Material', icon: Boxes, section: 'PERENCANAAN RAB' },
@@ -26,6 +28,13 @@ const WORKFLOW_NAV = [
 ]
 
 const hasContractNumber = (record) => String(record.contractNumber ?? '').trim().length > 0
+function getNotesCategory(record) {
+  const value = String(record.notes || record.program || '').trim()
+  if (/lanjutan|luncuran/i.test(value)) return 'Lanjutan'
+  if (/murni/i.test(value)) return 'Murni'
+  return value
+}
+
 function readSession() {
   try {
     return JSON.parse(window.sessionStorage.getItem(SESSION_KEY) || 'null')
@@ -59,7 +68,7 @@ function publicGroupsToRecords(groups) {
     id: `public-${index}`, program: group.program, year: group.year, publicCount: group.count,
     totalFinal: group.pagu, totalPrk: group.pagu, rabTotal: group.rab, paTotal: group.pa,
     contractValue: group.contract, billed: group.billed, paid: group.paid,
-    prkRemaining: group.remainingPrk, contractCount: group.contractCount,
+    prkRemaining: group.remainingPrk, projectedBilling: group.projectedBilling || 0, contractCount: group.contractCount,
     contractNumber: group.contract ? 'Ringkasan' : '',
   }))
 }
@@ -99,13 +108,24 @@ const REKAP_COLUMNS = [
   ['TOTAL RAB', 'rabTotal'], ['TOTAL PA', 'paTotal'], ['NOKONTRAK', 'contractNumber'], ['VENDOR', 'vendor'],
   ['NILAI KONTRAK', 'contractValue'], ['PENGEMBALIAN PA', 'paReturn'], ['PENGGANTIAN BIAYA', 'costReplacement'], ['TAGIHAN', 'billed'],
   ['TOTAL BAYAR', 'paid'], ['SISA PRK', 'prkRemaining'], ['PROGRAM', 'program'], ['TAHUN ANGGARAN', 'year'],
-  ['KETERANGAN', 'notes'], ['POS ANGGARAN', 'position'],
+  ['KETERANGAN', 'notes'], ['POS ANGGARAN', 'position'], ['TANGGAL AWAL', 'startDate'], ['TANGGAL AKHIR', 'endDate'],
+  ['RENCANA KONTRAK', 'plannedContract'], ['RENCANA TAGIH', 'plannedBilling'], ['PROGRESS', 'progress'],
+  ['PROYEKSI TAGIH', 'projectedBilling'], ['TANGGAL BAYAR', 'paymentDate'],
 ]
 const DASHBOARD_COLUMNS = [
   REKAP_COLUMNS[0], REKAP_COLUMNS[7], REKAP_COLUMNS[11], REKAP_COLUMNS[12], REKAP_COLUMNS[13], REKAP_COLUMNS[16],
   REKAP_COLUMNS[19], REKAP_COLUMNS[20], REKAP_COLUMNS[21], REKAP_COLUMNS[22], REKAP_COLUMNS[23], REKAP_COLUMNS[24],
 ]
-const MONEY_COLUMNS = new Set(['totalPrk', 'relocation', 'skkiRevision', 'totalFinal', 'rabTotal', 'paTotal', 'contractValue', 'paReturn', 'costReplacement', 'billed', 'paid', 'prkRemaining'])
+const MONEY_COLUMNS = new Set(['totalPrk', 'relocation', 'skkiRevision', 'totalFinal', 'rabTotal', 'paTotal', 'contractValue', 'paReturn', 'costReplacement', 'billed', 'paid', 'prkRemaining', 'plannedContract', 'plannedBilling', 'projectedBilling'])
+const DATE_COLUMNS = new Set(['startDate', 'endDate', 'paymentDate'])
+function formatDateDisplay(value) {
+  const match = String(value ?? '').match(/^(\d{4})-(\d{2})-(\d{2})(?:T|$)/)
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : value
+}
+
+function formatDateInput(value) {
+  return String(value ?? '').trim().match(/^\d{4}-\d{2}-\d{2}/)?.[0] || ''
+}
 
 function App() {
   const [publicCache] = useState(readPublicDashboardCache)
@@ -123,6 +143,7 @@ function App() {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedYear, setSelectedYear] = useState('all')
   const [selectedProgram, setSelectedProgram] = useState('all')
+  const [selectedNotesCategory, setSelectedNotesCategory] = useState('all')
   const [importModal, setImportModal] = useState(false)
   const [pendingImport, setPendingImport] = useState(null)
   const [importError, setImportError] = useState('')
@@ -248,12 +269,14 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [notice, logoutPending])
 
-  const years = useMemo(() => [...new Set(records.map((record) => record.year).filter(Boolean))].sort((a, b) => b - a), [records])
+  const years = YEAR_OPTIONS
   const programs = useMemo(() => [...new Set(records.map((record) => record.program).filter(Boolean))].sort(), [records])
   const dashboardRecords = useMemo(() => records.filter((record) =>
     (selectedYear === 'all' || String(record.year) === selectedYear)
       && (selectedProgram === 'all' || record.program === selectedProgram)
-  ), [records, selectedYear, selectedProgram])
+      && (selectedNotesCategory === 'all' || getNotesCategory(record) === selectedNotesCategory)
+  ), [records, selectedYear, selectedProgram, selectedNotesCategory])
+  const investmentSummary = useMemo(() => summarizePublicDashboard(dashboardRecords), [dashboardRecords])
   const contractRecords = useMemo(() => records.filter((record) => Number(record.paTotal) > 0
     || hasContractNumber(record)
     || String(record.vendor ?? '').trim().length > 0
@@ -583,16 +606,27 @@ function App() {
     setActiveView('data')
   }
 
-  async function saveContract(event) {
+  async function saveRecord(event) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
+    const numberOrBlank = (name) => {
+      const value = String(form.get(name) ?? '').trim()
+      return value ? Number(value) : ''
+    }
     const updated = records.map((record) => record.id === editingRecord.id ? {
       ...record,
       contractNumber: String(form.get('contractNumber') || '').trim(),
       vendor: String(form.get('vendor') || '').trim(),
       contractValue: Number(form.get('contractValue') || 0),
+      startDate: String(form.get('startDate') || '').trim(),
+      endDate: String(form.get('endDate') || '').trim(),
+      plannedContract: numberOrBlank('plannedContract'),
+      plannedBilling: numberOrBlank('plannedBilling'),
+      progress: String(form.get('progress') || '').trim(),
+      projectedBilling: numberOrBlank('projectedBilling'),
+      paymentDate: String(form.get('paymentDate') || '').trim(),
     } : record)
-    await saveRecords(updated, 'Data kontrak diperbarui.')
+    await saveRecords(updated, 'Data anggaran diperbarui.')
     setEditingRecord(null)
   }
 
@@ -654,16 +688,11 @@ function App() {
 
         <div className="page-content">
           {activeView === 'overview' && !auth ? <PublicDashboard groups={dashboardRecords} rows={publicRows} selectedYear={selectedYear} setSelectedYear={setSelectedYear} updatedAt={publicUpdatedAt} connection={connection} loading={publicLoading} error={publicError} /> : activeView === 'overview' ? <>
-            <section className="page-heading"><div><p className="eyebrow">DASHBOARD RAB</p><h1>Dashboard</h1><p className="heading-subtitle">Rekap anggaran investasi dan realisasi per program.</p></div>
-              <div className="filter-pair"><label className="select-wrap"><span className="sr-only">Filter tahun</span><select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}><option value="all">Semua tahun</option>{years.map((year) => <option key={year} value={String(year)}>{year}</option>)}</select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter program</span><select value={selectedProgram} onChange={(event) => setSelectedProgram(event.target.value)}><option value="all">Semua program</option>{programs.map((program) => <option key={program} value={program}>{program}</option>)}</select><ChevronDown size={15} /></label></div>
+            <section className="page-heading dashboard-heading"><div><p className="eyebrow">DASHBOARD RAB</p><p className="heading-subtitle">Rekap anggaran investasi dan realisasi per program.</p></div>
+              <div className="filter-pair"><label className="select-wrap"><span className="sr-only">Filter tahun</span><select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}><option value="all">Semua tahun</option>{years.map((year) => <option key={year} value={year}>{year}</option>)}</select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter program</span><select value={selectedProgram} onChange={(event) => setSelectedProgram(event.target.value)}><option value="all">Semua program</option>{programs.map((program) => <option key={program} value={program}>{program}</option>)}</select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter keterangan</span><select value={selectedNotesCategory} onChange={(event) => setSelectedNotesCategory(event.target.value)}><option value="all">Semua keterangan</option><option value="Murni">Murni</option><option value="Lanjutan">Lanjutan</option></select><ChevronDown size={15} /></label></div>
             </section>
 
-            <section className="metric-grid" aria-label="Indikator utama">
-              <article className="metric-card metric-primary"><div className="metric-top"><span>Pagu PRK final</span><span className="metric-icon"><BarChart3 size={17} /></span></div><strong>{formatCurrency(totals.prk)}</strong><div className="metric-foot"><span className="metric-dot lime-dot" />Dari {dashboardRecordCount} data anggaran</div></article>
-              <article className="metric-card"><div className="metric-top"><span>Total RAB</span><span className="metric-icon pale-icon"><FileSpreadsheet size={17} /></span></div><strong>{formatCurrency(totals.rab)}</strong><div className="metric-foot">Akumulasi nilai RAB</div></article>
-              <article className="metric-card"><div className="metric-top"><span>Nilai kontrak</span><span className="metric-icon orange-icon"><FolderKanban size={17} /></span></div><strong>{formatCurrency(totals.contract)}</strong><div className="metric-foot">Nilai yang dicatat manual</div></article>
-              <article className="metric-card"><div className="metric-top"><span>Total dibayar</span><span className="metric-icon mint-icon"><Check size={17} /></span></div><strong>{formatCurrency(totals.paid)}</strong><div className="metric-foot">Tagihan tercatat {formatCurrency(totals.billed)}</div></article>
-            </section>
+            <AuthenticatedInvestmentSummary summary={investmentSummary} />
 
             {auth && <section className="workflow-overview panel" aria-label="Ringkasan input RAB dan realisasi">
               <div className="workflow-overview-heading"><div><p className="eyebrow">ALUR INPUT RAB</p><h2>RAB sampai realisasi</h2></div><button className="text-action" onClick={() => setActiveView('materials')}>Buka alur <span aria-hidden="true">-&gt;</span></button></div>
@@ -690,7 +719,7 @@ function App() {
             {auth && <ProjectTable records={latestPrkRecords} onEdit={canEdit ? setEditingRecord : undefined} onViewAll={() => setActiveView('data')} compact readOnly={!canEdit} />}
           </> : activeView === 'data' && auth ? <>
             <section className="page-heading data-heading"><div><p className="eyebrow">PORTOFOLIO ANGGARAN</p><h1>Data anggaran</h1><p className="heading-subtitle">Kelola rekap RAB dan lengkapi nilai kontrak secara manual.</p></div>{canEdit && <button className="button button-primary" onClick={() => { setImportModal(true); setImportError(''); setPendingImport(null) }}><Upload size={16} /><span>Impor data</span></button>}</section>
-            <ProjectTable records={filteredRecords} onEdit={canEdit ? setEditingRecord : undefined} onViewAll={() => setActiveView('data')} searchTerm={searchTerm} setSearchTerm={setSearchTerm} selectedYear={selectedYear} setSelectedYear={setSelectedYear} years={years} selectedProgram={selectedProgram} setSelectedProgram={setSelectedProgram} programs={programs} readOnly={!canEdit} />
+            <ProjectTable records={filteredRecords} onEdit={canEdit ? setEditingRecord : undefined} onViewAll={() => setActiveView('data')} searchTerm={searchTerm} setSearchTerm={setSearchTerm} selectedYear={selectedYear} setSelectedYear={setSelectedYear} years={years} selectedProgram={selectedProgram} setSelectedProgram={setSelectedProgram} programs={programs} selectedNotesCategory={selectedNotesCategory} setSelectedNotesCategory={setSelectedNotesCategory} readOnly={!canEdit} />
             <div className="table-footnote"><ShieldCheck size={14} /> Aplikasi ini untuk rekap dan monitoring. Proses tender dan kontrak dilakukan di luar aplikasi.</div>
           </> : activeView === 'contracts' && auth ? <>
             <section className="page-heading data-heading"><div><p className="eyebrow">ADMINISTRASI PENGADAAN</p><h1>Data Kontrak</h1><p className="heading-subtitle">Catat nomor kontrak, vendor pemenang, dan nilai kontrak aktual per PRK/RAB.</p></div></section>
@@ -718,15 +747,15 @@ function App() {
       </section></div>}
 
       {importModal && canEdit && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setImportModal(false) }}><section className="modal import-modal" role="dialog" aria-modal="true" aria-labelledby="import-title">
-        <div className="modal-heading"><div><p className="eyebrow">IMPOR DATA</p><h2 id="import-title">Unggah workbook Excel</h2><p>Pilih file DATA APLIKASI.xlsx atau file dengan kolom rekap A-Z.</p></div><button className="icon-button" aria-label="Tutup" onClick={() => setImportModal(false)}><X size={19} /></button></div>
+        <div className="modal-heading"><div><p className="eyebrow">IMPOR DATA</p><h2 id="import-title">Unggah workbook Excel</h2><p>Pilih file DATA APLIKASI.xlsx atau file dengan kolom rekap hingga AG.</p></div><button className="icon-button" aria-label="Tutup" onClick={() => setImportModal(false)}><X size={19} /></button></div>
         <button className={`upload-zone ${pendingImport ? 'has-file' : ''}`} onClick={() => fileInput.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); receiveFile(event.dataTransfer.files[0]) }}><input ref={fileInput} type="file" accept=".xlsx" hidden onChange={(event) => { receiveFile(event.target.files[0]); event.target.value = '' }} /><div className="upload-icon">{pendingImport ? <Check size={20} /> : <Upload size={20} />}</div><strong>{pendingImport ? pendingImport.fileName : 'Klik untuk memilih file'}</strong><span>{pendingImport ? `Sheet: ${pendingImport.sheetName}` : 'atau tarik file Excel ke area ini (.xlsx)'}</span></button>
         {importError && <div className="inline-error"><CircleAlert size={16} />{importError}</div>}
         {pendingImport && <div className="import-preview"><div><span>Data rekap/PRK</span><strong>{pendingImport.records.length} baris</strong></div><div><span>Sheet rekap</span><strong>{pendingImport.sheetName}</strong></div><div><span>Master material</span><strong>{pendingImport.materials?.length || 0} item</strong></div><div><span>Database kegiatan</span><strong>{pendingImport.activityCatalog?.length || 0} kegiatan</strong></div><p>Data material dan kegiatan dari workbook akan digabung dengan master manual yang sudah ada.</p></div>}
         <div className="modal-actions"><button className="button button-secondary" onClick={() => setImportModal(false)}>Batal</button><button className="button button-primary" disabled={!pendingImport?.records.length} onClick={confirmImport}><ArrowUpFromLine size={16} /><span>Impor {pendingImport ? `${pendingImport.records.length} data` : 'data'}</span></button></div>
       </section></div>}
 
-      {editingRecord && canEdit && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditingRecord(null) }}><section className="modal contract-modal" role="dialog" aria-modal="true" aria-labelledby="contract-title"><div className="modal-heading"><div><p className="eyebrow">INPUT DATA KONTRAK</p><h2 id="contract-title">Lengkapi data pemenang</h2><p className="modal-project-name">{editingRecord.description}</p></div><button className="icon-button" aria-label="Tutup" onClick={() => setEditingRecord(null)}><X size={19} /></button></div>
-        <form onSubmit={saveContract}><label className="field-label">Nomor kontrak<input name="contractNumber" defaultValue={editingRecord.contractNumber} placeholder="Masukkan nomor kontrak" /></label><label className="field-label">Vendor pemenang<input name="vendor" defaultValue={editingRecord.vendor} placeholder="Masukkan nama vendor pemenang" /></label><label className="field-label">Nilai kontrak aktual (Rp)<input name="contractValue" type="number" min="0" step="1" defaultValue={editingRecord.contractValue || ''} placeholder="0" /></label><p className="form-note"><CircleAlert size={15} /> Nilai kontrak mengikuti dokumen kontrak; nilai PA tetap menjadi alokasi/pagu. Input ini untuk pencatatan, bukan penerbitan kontrak.</p><div className="modal-actions"><button type="button" className="button button-secondary" onClick={() => setEditingRecord(null)}>Batal</button><button type="submit" className="button button-primary"><Check size={16} />Simpan data</button></div></form>
+      {editingRecord && canEdit && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditingRecord(null) }}><section className="modal contract-modal" role="dialog" aria-modal="true" aria-labelledby="contract-title"><div className="modal-heading"><div><p className="eyebrow">INPUT DATA ANGGARAN</p><h2 id="contract-title">Edit data anggaran</h2><p className="modal-project-name">{editingRecord.description}</p></div><button className="icon-button" aria-label="Tutup" onClick={() => setEditingRecord(null)}><X size={19} /></button></div>
+        <form onSubmit={saveRecord}><div className="record-edit-grid"><label className="field-label">Nomor kontrak<input name="contractNumber" defaultValue={editingRecord.contractNumber} placeholder="Masukkan nomor kontrak" /></label><label className="field-label">Vendor pemenang<input name="vendor" defaultValue={editingRecord.vendor} placeholder="Masukkan nama vendor pemenang" /></label><label className="field-label">Nilai kontrak aktual (Rp)<input name="contractValue" type="number" min="0" step="1" defaultValue={editingRecord.contractValue || ''} placeholder="0" /></label><label className="field-label">Tanggal awal<input name="startDate" type="date" defaultValue={formatDateInput(editingRecord.startDate)} /></label><label className="field-label">Tanggal akhir<input name="endDate" type="date" defaultValue={formatDateInput(editingRecord.endDate)} /></label><label className="field-label">Rencana kontrak (Rp)<input name="plannedContract" type="number" min="0" step="1" defaultValue={editingRecord.plannedContract ?? ''} placeholder="0" /></label><label className="field-label">Rencana tagih (Rp)<input name="plannedBilling" type="number" min="0" step="1" defaultValue={editingRecord.plannedBilling ?? ''} placeholder="0" /></label><label className="field-label">Progress<input name="progress" defaultValue={editingRecord.progress || ''} placeholder="Contoh: LUNAS" /></label><label className="field-label">Proyeksi tagih (Rp)<input name="projectedBilling" type="number" min="0" step="1" defaultValue={editingRecord.projectedBilling ?? ''} placeholder="0" /></label><label className="field-label">Tanggal bayar<input name="paymentDate" type="date" defaultValue={formatDateInput(editingRecord.paymentDate)} /></label></div><p className="form-note"><CircleAlert size={15} /> Nilai kontrak mengikuti dokumen kontrak; nilai PA tetap menjadi alokasi/pagu.</p><div className="modal-actions"><button type="button" className="button button-secondary" onClick={() => setEditingRecord(null)}>Batal</button><button type="submit" className="button button-primary"><Check size={16} />Simpan data</button></div></form>
       </section></div>}
       {notice && <div className="toast" role="status">{logoutPending ? <LoaderCircle className="toast-progress" size={16} /> : <Check size={16} />}{notice}</div>}
     </div>
@@ -746,11 +775,11 @@ function ContractTable({ records, onEdit, readOnly = false }) {
   </section>
 }
 
-function ProjectTable({ records, onEdit, onViewAll, compact = false, readOnly = false, searchTerm = '', setSearchTerm, selectedYear, setSelectedYear, years = [], selectedProgram, setSelectedProgram, programs = [] }) {
+function ProjectTable({ records, onEdit, onViewAll, compact = false, readOnly = false, searchTerm = '', setSearchTerm, selectedYear, setSelectedYear, years = [], selectedProgram, setSelectedProgram, programs = [], selectedNotesCategory, setSelectedNotesCategory }) {
   const columns = compact ? DASHBOARD_COLUMNS : REKAP_COLUMNS
   return <section className={`panel table-panel ${compact ? 'dashboard-latest-panel' : ''}`}>
     <div className="table-heading"><div><p className="eyebrow">{compact ? 'DATA TERBARU' : 'DAFTAR RAB'}</p><h2>{compact ? 'Anggaran terbaru' : 'Seluruh data anggaran'}</h2></div>{compact ? <button className="text-action" onClick={onViewAll}>Lihat semua <span aria-hidden="true">-&gt;</span></button> : <span className="row-count">{records.length} data</span>}</div>
-    {!compact && <div className="table-toolbar"><label className="search-field"><Search size={16} /><input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Cari PRK, RAB, uraian..." /></label><label className="select-wrap toolbar-select"><span className="sr-only">Filter tahun</span><select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}><option value="all">Semua tahun</option>{years.map((year) => <option key={year} value={String(year)}>{year}</option>)}</select><ChevronDown size={15} /></label><label className="select-wrap toolbar-select"><span className="sr-only">Filter program</span><select value={selectedProgram} onChange={(event) => setSelectedProgram(event.target.value)}><option value="all">Semua program</option>{programs.map((program) => <option key={program} value={program}>{program}</option>)}</select><ChevronDown size={15} /></label></div>}
+    {!compact && <div className="table-toolbar"><label className="search-field"><Search size={16} /><input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Cari PRK, RAB, uraian..." /></label><label className="select-wrap toolbar-select"><span className="sr-only">Filter tahun</span><select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}><option value="all">Semua tahun</option>{years.map((year) => <option key={year} value={year}>{year}</option>)}</select><ChevronDown size={15} /></label><label className="select-wrap toolbar-select"><span className="sr-only">Filter program</span><select value={selectedProgram} onChange={(event) => setSelectedProgram(event.target.value)}><option value="all">Semua program</option>{programs.map((program) => <option key={program} value={program}>{program}</option>)}</select><ChevronDown size={15} /></label><label className="select-wrap toolbar-select"><span className="sr-only">Filter keterangan</span><select value={selectedNotesCategory} onChange={(event) => setSelectedNotesCategory(event.target.value)}><option value="all">Semua keterangan</option><option value="Murni">Murni</option><option value="Lanjutan">Lanjutan</option></select><ChevronDown size={15} /></label></div>}
     <div className={`table-scroll ${compact ? 'dashboard-latest-scroll' : 'all-rekap-scroll'}`}><table><thead><tr>{compact && <th>NO</th>}{columns.map(([header, key], index) => <th key={`${key}-${index}`}>{header}</th>)}{!compact && !readOnly && <th><span className="sr-only">Aksi</span></th>}</tr></thead><tbody>
       {records.length ? records.map((record, rowIndex) => <tr key={record.id}>{compact && <td className="row-number-cell">{rowIndex + 1}</td>}{columns.map(([, key], index) => {
         const value = record[key]
@@ -758,36 +787,121 @@ function ProjectTable({ records, onEdit, onViewAll, compact = false, readOnly = 
         const descriptionTitle = isDescription && value ? `${value}${record.position ? ` — Pos anggaran ${record.position}` : ''}` : undefined
         const cellTitle = key === 'contractNumber' || key === 'vendor' ? value || undefined : descriptionTitle
         const descriptionClass = isDescription ? (compact ? 'dashboard-description-cell' : 'all-rekap-description-cell') : ''
-        return <td className={`${MONEY_COLUMNS.has(key) ? 'money-cell ' : ''}${descriptionClass}`} title={cellTitle} key={`${key}-${index}`}>{!readOnly && !compact && key === 'contractValue' ? <button className="contract-value" onClick={() => onEdit?.(record)} title="Edit nilai kontrak"><span>{formatCurrency(value)}</span><Pencil size={13} /></button> : value === null || value === undefined || value === '' ? '-' : MONEY_COLUMNS.has(key) ? formatCurrency(value) : value}</td>
-      })}{!compact && !readOnly && <td><button className="row-action" aria-label={`Edit kontrak ${record.prk || record.rabNumber || record.description}`} onClick={() => onEdit?.(record)}><Pencil size={15} /></button></td>}</tr>) : <tr><td colSpan={columns.length + (compact ? 1 : readOnly ? 0 : 1)}><div className="empty-table"><FileSpreadsheet size={24} /><strong>Belum ada data yang cocok</strong><span>Ubah filter atau impor workbook Excel.</span></div></td></tr>}
+        return <td className={`${MONEY_COLUMNS.has(key) ? 'money-cell ' : ''}${descriptionClass}`} title={cellTitle} key={`${key}-${index}`}>{!readOnly && !compact && key === 'contractValue' ? <button className="contract-value" onClick={() => onEdit?.(record)} title="Edit data anggaran"><span>{formatCurrency(value)}</span><Pencil size={13} /></button> : value === null || value === undefined || value === '' ? '-' : MONEY_COLUMNS.has(key) ? formatCurrency(value) : DATE_COLUMNS.has(key) ? formatDateDisplay(value) : value}</td>
+      })}{!compact && !readOnly && <td><button className="row-action" aria-label={`Edit data anggaran ${record.prk || record.rabNumber || record.description}`} onClick={() => onEdit?.(record)}><Pencil size={15} /></button></td>}</tr>) : <tr><td colSpan={columns.length + (compact ? 1 : readOnly ? 0 : 1)}><div className="empty-table"><FileSpreadsheet size={24} /><strong>Belum ada data yang cocok</strong><span>Ubah filter atau impor workbook Excel.</span></div></td></tr>}
     </tbody></table></div>
-    <div className="table-summary"><span>Menampilkan {records.length} baris</span>{!compact && !readOnly && <span><span className="summary-dot" /> Nilai kontrak dapat diedit manual</span>}</div>
+    <div className="table-summary"><span>Menampilkan {records.length} baris</span>{!compact && !readOnly && <span><span className="summary-dot" /> Data anggaran dapat diedit manual</span>}</div>
+  </section>
+}
+
+function investmentPercent(value, denominator) {
+  return denominator > 0 ? `${(value / denominator * 100).toFixed(2)}%` : '0.00%'
+}
+
+function formatPercent(value) {
+  return `${Number(value || 0).toFixed(2)}%`
+}
+
+function formatReferencePercent(value, denominator, precision = 'rounded') {
+  const result = denominator > 0 ? value / denominator * 100 : 0
+  if (precision === 'one-decimal') return `${result.toFixed(1)}%`
+  if (precision === 'exact') return `${result.toFixed(2)}%`
+  return result > 0 && result < 1 ? `${result.toFixed(2)}%` : `${Math.round(result)}%`
+}
+
+function AuthenticatedInvestmentSummary({ summary }) {
+  const { totals, categories, percentages } = summary
+  const metrics = [
+    ['Total RAB', 'rab', percentages.totals.rab, 'AI Total'],
+    ['Total PA', 'pa', percentages.totals.pa, 'AI Total'],
+    ['Total Kontrak', 'contract', percentages.totals.contract, 'AI Total'],
+    ['Total Tagihan', 'billed', percentages.totals.billed, 'Total Kontrak'],
+    ['Total Bayar', 'paid', percentages.totals.paid, 'Total Kontrak'],
+    ['Sisa PRK', 'remainingPrk', percentages.totals.remainingPrk, 'AI Total'],
+  ]
+
+  return <section className="authenticated-investment-summary" aria-label="Ringkasan AI, RAB, PA, kontrak, tagihan, dan pembayaran">
+    <article className="authenticated-ai-total">
+      <span>AI TOTAL</span>
+      <strong>{formatCurrency(totals.ai)}</strong>
+      <div>
+        <span>AI MURNI <b>{formatCurrency(categories.murni.ai)}</b><small>{formatPercent(percentages.ai.murni)} dari AI total</small></span>
+        <span>AI LANJUTAN / LUNCURAN <b>{formatCurrency(categories.lanjutan.ai)}</b><small>{formatPercent(percentages.ai.lanjutan)} dari AI total</small></span>
+      </div>
+    </article>
+    <div className="authenticated-total-grid" aria-label="Total anggaran">
+      {metrics.map(([label, key, percent, denominator]) => <article key={key}>
+        <span>{label}</span><strong>{formatCurrency(totals[key])}</strong>        <small>{formatPercent(percent)} dari {denominator}</small>
+      </article>)}
+    </div>
+    <div className="authenticated-category-grid" aria-label="Rincian menurut anggaran">
+      {[
+        { key: 'murni', title: 'ANGGARAN MURNI' },
+        { key: 'lanjutan', title: 'ANGGARAN LANJUTAN / LUNCURAN' },
+      ].map(({ key, title }) => <article className={`authenticated-category-card authenticated-category-card--${key}`} key={key}>
+        <h2>{title}</h2>
+        <div className="authenticated-category-ai"><span>AI</span><strong>{formatCurrency(categories[key].ai)}</strong><small>{investmentPercent(percentages.ai[key], 100)} dari AI total</small></div>
+        <div className="authenticated-category-metrics">
+          {metrics.map(([label, metric]) => <div key={metric}>
+            <span>{label}</span><strong>{formatCurrency(categories[key][metric])}</strong>
+            <small>{investmentPercent(percentages.categories[key][metric], 100)} {metric === 'billed' || metric === 'paid' ? 'dari kontrak kategori' : metric === 'remainingPrk' ? 'dari AI kategori' : `dari AI ${key}`}</small>
+          </div>)}
+        </div>
+      </article>)}
+    </div>
   </section>
 }
 
 function PublicProgramCard({ card, selectedYear }) {
-  const unpaid = Math.max(0, card.billed - card.paid)
-  const pieData = [
-    { name: 'RAB', value: Math.max(0, card.rab), color: '#2878a5' },
-    { name: 'Kontrak', value: Math.max(0, card.contract), color: '#e5a23b' },
-    { name: 'Terbayar', value: Math.max(0, card.paid), color: '#23866a' },
-    { name: 'Sisa PRK', value: Math.max(0, card.remainingPrk), color: '#d25d55' },
-  ]
+  const unpaid = Math.max(0, card.contract - card.paid)
+  const continuation = card.category === 'Lanjutan'
+  const paidColor = continuation ? '#4385ed' : '#e64b3f'
+  const pieData = continuation
+    ? [
+      { name: 'Terbayar', value: Math.max(0, card.paid), color: paidColor },
+      { name: 'Sisa', value: Math.max(0, card.remainingPrk), color: '#f0b33c' },
+    ]
+    : [
+      { name: 'Kontrak', value: Math.max(0, card.contract), color: paidColor },
+      { name: 'Sisa PRK', value: Math.max(0, card.remainingPrk), color: '#f0b33c' },
+    ]
   const pieTotal = pieData.reduce((sum, item) => sum + item.value, 0)
-  const pieDataWithPercent = pieData.map((item) => ({ ...item, percentage: pieTotal ? item.value / pieTotal * 100 : 0 }))
-  const chartType = card.chartType === 'donut' ? 'donut' : 'pie'
+  const metrics = continuation ? [
+    { name: 'KONTRAK', value: card.contract, percent: formatReferencePercent(card.contract, card.pagu) },
+    { name: 'TERBAYAR', value: card.paid, percent: formatReferencePercent(card.paid, card.contract) },
+    { name: 'SISA', value: card.remainingPrk, percent: formatReferencePercent(card.remainingPrk, card.pagu) },
+  ] : [
+    { name: 'RAB', value: card.rab, percent: formatReferencePercent(card.rab, card.pagu, 'exact') },
+    { name: 'PA', value: card.pa, percent: formatReferencePercent(card.pa, card.pagu) },
+    { name: 'KONTRAK', value: card.contract, percent: formatReferencePercent(card.contract, card.pagu) },
+    { name: 'SISA PRK', value: card.remainingPrk, percent: formatReferencePercent(card.remainingPrk, card.pagu, 'exact') },
+    { name: 'TERBAYAR', value: card.paid, percent: formatReferencePercent(card.paid, card.contract) },
+    { name: 'BELUM TERBAYAR', value: unpaid, percent: formatReferencePercent(unpaid, card.contract) },
+    { name: 'REN LUNCURAN', value: card.projectedBilling, percent: formatReferencePercent(card.projectedBilling, card.pagu, 'one-decimal') },
+  ]
 
-  return <article className={`public-program-card public-program-card--${chartType}`}>
-    <h2>{card.title}</h2>
-    <div className="public-program-total"><span>{selectedYear === 'all' ? 'Semua tahun' : selectedYear} / {card.count} paket</span><strong>{formatCurrency(card.pagu)}</strong></div>
-    <div className="public-program-body">
-      <div className={`public-chart-wrap public-chart-wrap--${chartType}`}>
-        {pieTotal ? <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={pieDataWithPercent} dataKey="value" nameKey="name" innerRadius={chartType === 'donut' ? '61%' : 0} outerRadius="84%" paddingAngle={2} stroke="none">{pieDataWithPercent.map((item) => <Cell key={item.name} fill={item.color} />)}</Pie><Tooltip formatter={(value, name) => [formatCurrency(value), name]} contentStyle={{ border: '1px solid #dce4ee', borderRadius: 4, fontSize: 10 }} /></PieChart></ResponsiveContainer> : <div className={`public-chart-empty public-chart-empty--${chartType}`} />}
-        {chartType === 'donut' && <div className="public-donut-center"><strong>{pieTotal ? '100%' : '0%'}</strong><span>komposisi</span></div>}
+  return <article className={`public-program-card ${continuation ? 'public-program-card--continuation' : 'public-program-card--pure'}`}>
+    <h2>{continuation ? card.title.replace('LANJUTAN', 'LUNCURAN') : card.title}</h2>
+    <div className="public-program-total"><span>{selectedYear === 'all' ? 'Semua tahun' : selectedYear} · {card.count} paket</span><strong>{formatCurrency(card.pagu)}</strong></div>
+    <div className={`public-program-body ${continuation ? 'is-continuation' : ''}`}>
+      <div className="public-chart-column">
+        <div className="public-chart-wrap">
+          {pieTotal ? <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={pieData} dataKey="value" nameKey="name" innerRadius={continuation ? 0 : '57%'} outerRadius="82%" paddingAngle={1} stroke="none">{pieData.map((item) => <Cell key={item.name} fill={item.color} />)}</Pie><Tooltip formatter={(value, name) => [formatCurrency(value), name]} contentStyle={{ border: '1px solid #dce4ee', borderRadius: 4, fontSize: 10 }} /></PieChart></ResponsiveContainer> : <div className="public-chart-empty" />}
+        </div>
+        <div className="public-chart-legend" aria-label="Keterangan diagram">
+          {continuation
+            ? <>
+              <span><i style={{ backgroundColor: paidColor }} />Terbayar <b>{formatReferencePercent(card.paid, card.contract)}</b></span>
+              <span><i style={{ backgroundColor: '#f0b33c' }} />Sisa <b>{formatReferencePercent(card.remainingPrk, card.pagu, 'exact')}</b></span>
+            </>
+            : <>
+              <span><i style={{ backgroundColor: paidColor }} />Kontrak <b>{formatReferencePercent(card.contract, card.pagu, 'exact')}</b></span>
+              <span><i style={{ backgroundColor: '#f0b33c' }} />Sisa PRK <b>{formatReferencePercent(card.remainingPrk, card.pagu, 'exact')}</b></span>
+            </>}
+        </div>
       </div>
-      <div className="public-program-metrics">
-        {pieDataWithPercent.map((item) => <div key={item.name}><span><i style={{ backgroundColor: item.color }} />{item.name}<small>{item.percentage.toFixed(1)}%</small></span><strong>{formatCurrency(item.value)}</strong></div>)}
-        <div className="public-unpaid-metric"><span><i />Belum terbayar</span><strong>{formatCurrency(unpaid)}</strong></div>
+      <div className={`public-program-metrics ${continuation ? 'is-continuation' : ''}`}>
+        {metrics.map((item) => <div key={item.name}><span>{item.name}</span><strong>{formatCurrency(item.value)}</strong><small>{item.percent}</small></div>)}
       </div>
     </div>
   </article>
@@ -796,18 +910,12 @@ function PublicProgramCard({ card, selectedYear }) {
 function PublicDashboard({ rows, selectedYear, setSelectedYear, updatedAt, connection, loading, error }) {
   const [programFilter, setProgramFilter] = useState('all')
   const [notesFilter, setNotesFilter] = useState('all')
-  const publicYears = ['2024', '2025', '2026', '2027', '2028', '2029', '2030']
+  const publicYears = YEAR_OPTIONS
   const programCode = (value) => String(value || '').match(/\b(DAL|EFI|SAR)\b/i)?.[1].toUpperCase() || ''
-  const notesCategory = (row) => {
-    const value = String(row.notes || `${row.program || ''}`).trim()
-    if (/lanjutan|luncuran/i.test(value)) return 'Lanjutan'
-    if (/murni/i.test(value)) return 'Murni'
-    return value
-  }
   const filteredRows = rows.filter((row) =>
     (selectedYear === 'all' || String(row.year) === selectedYear)
       && (programFilter === 'all' || programCode(row.program) === programFilter)
-      && (notesFilter === 'all' || notesCategory(row) === notesFilter)
+      && (notesFilter === 'all' || getNotesCategory(row) === notesFilter)
   )
   const chartRows = filteredRows
   const programCards = [
@@ -818,17 +926,20 @@ function PublicDashboard({ rows, selectedYear, setSelectedYear, updatedAt, conne
     { code: 'DAL', category: 'Murni', title: 'DAL MURNI', chartType: 'donut' },
     { code: 'EFI', category: 'Murni', title: 'EFI MURNI', chartType: 'donut' },
   ].map((card) => {
-    const matchingRows = chartRows.filter((row) => programCode(row.program) === card.code && notesCategory(row) === card.category)
-    return matchingRows.reduce((summary, row) => ({
-      ...summary,
-      count: summary.count + 1,
-      pagu: summary.pagu + Number(row.totalFinal || row.totalPrk || 0),
-      rab: summary.rab + Number(row.rabTotal || 0),
-      contract: summary.contract + Number(row.contractValue || 0),
-      billed: summary.billed + Number(row.billed || 0),
-      paid: summary.paid + Number(row.paid || 0),
-      remainingPrk: summary.remainingPrk + Number(row.prkRemaining || 0),
-    }), { ...card, count: 0, pagu: 0, rab: 0, contract: 0, billed: 0, paid: 0, remainingPrk: 0 })
+    const matchingRows = chartRows.filter((row) => programCode(row.program) === card.code && getNotesCategory(row) === card.category)
+    const summary = summarizePublicDashboard(matchingRows).totals
+    return {
+      ...card,
+      count: summary.count,
+      pagu: summary.ai,
+      rab: summary.rab,
+      pa: summary.pa,
+      contract: summary.contract,
+      billed: summary.billed,
+      paid: summary.paid,
+      remainingPrk: summary.remainingPrk,
+      projectedBilling: summary.projectedBilling,
+    }
   })
   const visibleProgramCards = programCards.filter((card) => card.count > 0)
   const pureCards = visibleProgramCards.filter((card) => card.category === 'Murni')
@@ -837,37 +948,26 @@ function PublicDashboard({ rows, selectedYear, setSelectedYear, updatedAt, conne
     ? ''
     : pureCards.length ? 'public-board-layout--only-pure'
       : continuationCards.length ? 'public-board-layout--only-continuation' : 'public-board-layout--empty'
-  const totals = filteredRows.reduce((sum, row) => ({
-    count: sum.count + 1,
-    pagu: sum.pagu + Number(row.totalFinal || row.totalPrk || 0),
-    rab: sum.rab + Number(row.rabTotal || 0),
-    contract: sum.contract + Number(row.contractValue || 0),
-    billed: sum.billed + Number(row.billed || 0),
-    paid: sum.paid + Number(row.paid || 0),
-    remainingPrk: sum.remainingPrk + Number(row.prkRemaining || 0),
-  }), { count: 0, pagu: 0, rab: 0, contract: 0, billed: 0, paid: 0, remainingPrk: 0 })
-  const notesTotals = filteredRows.reduce((sum, row) => {
-    const category = notesCategory(row)
-    if (category === 'Murni') sum.murni += Number(row.totalFinal || row.totalPrk || 0)
-    if (category === 'Lanjutan') sum.lanjutan += Number(row.totalFinal || row.totalPrk || 0)
-    return sum
-  }, { murni: 0, lanjutan: 0 })
-  const hasMurniRows = filteredRows.some((row) => notesCategory(row) === 'Murni')
-  const hasContinuationRows = filteredRows.some((row) => notesCategory(row) === 'Lanjutan')
-  const paguPercent = (value) => totals.pagu > 0 ? `${(value / totals.pagu * 100).toFixed(1)}%` : '0%'
+  const summary = summarizePublicDashboard(filteredRows)
+  const { totals, categories, percentages } = summary
   const latestYear = [...new Set(rows.map((row) => String(row.year || '')).filter(Boolean))].sort().at(-1)
   const titleYear = selectedYear === 'all' ? latestYear || new Date().getFullYear() : selectedYear
   const updatedLabel = updatedAt ? new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(updatedAt)) : '--:--'
 
   return <div className="public-dashboard">
-    <section className="public-dashboard-heading"><div><p className="eyebrow">RINGKASAN ANGGARAN INVESTASI</p><h1>DASHBOARD AI {titleYear}</h1><p>Ringkasan RAB, kontrak, dan pembayaran.</p></div><div className="public-dashboard-filters"><label className="select-wrap"><span className="sr-only">Filter program</span><select value={programFilter} onChange={(event) => setProgramFilter(event.target.value)}><option value="all">Semua program</option><option value="DAL">DAL</option><option value="EFI">EFI</option><option value="SAR">SAR</option></select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter tahun</span><select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}><option value="all">Semua tahun</option>{publicYears.map((year) => <option key={year} value={year}>{year}</option>)}</select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter keterangan</span><select value={notesFilter} onChange={(event) => setNotesFilter(event.target.value)}><option value="all">Semua keterangan</option><option value="Murni">Murni</option><option value="Lanjutan">Lanjutan</option></select><ChevronDown size={15} /></label></div></section>
+    <section className="public-dashboard-heading"><div><p className="eyebrow">RINGKASAN ANGGARAN INVESTASI</p><h1>DASHBOARD AI {titleYear}</h1><p>Ringkasan AI, RAB, PA, kontrak, tagihan, dan pembayaran.</p></div><div className="public-dashboard-filters"><label className="select-wrap"><span className="sr-only">Filter program</span><select value={programFilter} onChange={(event) => setProgramFilter(event.target.value)}><option value="all">Semua program</option><option value="DAL">DAL</option><option value="EFI">EFI</option><option value="SAR">SAR</option></select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter tahun</span><select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}><option value="all">Semua tahun</option>{publicYears.map((year) => <option key={year} value={year}>{year}</option>)}</select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter keterangan</span><select value={notesFilter} onChange={(event) => setNotesFilter(event.target.value)}><option value="all">Semua keterangan</option><option value="Murni">Murni</option><option value="Lanjutan">Lanjutan</option></select><ChevronDown size={15} /></label></div></section>
 
+    <div className="public-board-scroll">
     <section className={`public-board-layout ${boardLayout}`} aria-label="Ringkasan per program">
-      <aside className="public-annual-summary"><div className="public-annual-heading">SKKI BARA {titleYear}</div><strong>{formatCurrency(totals.pagu)}</strong><div className="public-summary-label">TOTAL PAGU</div>
-        {hasMurniRows && <div className="public-summary-line"><span>MURNI</span><strong>{formatCurrency(notesTotals.murni)}</strong></div>}
-        {hasContinuationRows && <div className="public-summary-line"><span>LANJUTAN</span><strong>{formatCurrency(notesTotals.lanjutan)}</strong></div>}
-        <div className="public-summary-line"><span>KONTRAK</span><strong>{formatCurrency(totals.contract)}<small>{paguPercent(totals.contract)} dari pagu</small></strong></div>
-        <div className="public-summary-line"><span>SISA PRK</span><strong>{formatCurrency(totals.remainingPrk)}<small>{paguPercent(totals.remainingPrk)} dari pagu</small></strong></div>
+      <aside className="public-annual-summary">
+        <div className="public-annual-heading">SKKI BARA {titleYear}</div>
+        <div className="public-overall-ai"><span>AI TOTAL</span><strong>{formatCurrency(totals.ai)}</strong></div>
+        <div className="public-overall-categories">
+          <div><span>MURNI</span><strong>{formatCurrency(categories.murni.ai)}</strong><small>{formatPercent(percentages.ai.murni)}</small></div>
+          <div><span>LANJUTAN</span><strong>{formatCurrency(categories.lanjutan.ai)}</strong><small>{formatPercent(percentages.ai.lanjutan)}</small></div>
+        </div>
+        <div className="public-annual-pair"><span>KONTRAK MURNI<strong>{formatCurrency(categories.murni.contract)}</strong><small>{formatReferencePercent(categories.murni.contract, categories.murni.ai, 'exact')}</small></span><span>KONTRAK LAN<strong>{formatCurrency(categories.lanjutan.contract)}</strong><small>{formatReferencePercent(categories.lanjutan.contract, categories.lanjutan.ai, 'exact')}</small></span></div>
+        <div className="public-annual-pair"><span>SISA MURNI<strong>{formatCurrency(categories.murni.remainingPrk)}</strong><small>{formatReferencePercent(categories.murni.remainingPrk, categories.murni.ai, 'exact')}</small></span><span>SISA LANJUTAN<strong>{formatCurrency(categories.lanjutan.remainingPrk)}</strong><small>{formatReferencePercent(categories.lanjutan.remainingPrk, categories.lanjutan.ai, 'exact')}</small></span></div>
       </aside>
       {pureCards.length > 0 && <div className="public-program-column public-program-column--pure" aria-label="Program murni">
         {pureCards.map((card) => <PublicProgramCard key={card.title} card={card} selectedYear={selectedYear} />)}
@@ -877,12 +977,13 @@ function PublicDashboard({ rows, selectedYear, setSelectedYear, updatedAt, conne
       </div>}
 
     </section>
+    </div>
 
     <section className="public-dashboard-table panel">
       <div className="public-table-heading"><div><p className="eyebrow">SINKRON DARI RABDATA</p><h2>Data dashboard per PRK</h2></div><span className={`public-live-status ${connection === 'cloud' ? 'is-live' : ''}`}><i />{loading ? rows.length ? 'Data tersimpan · memuat pembaruan...' : 'Memuat data Google Sheets...' : error ? rows.length ? 'Koneksi lambat · menampilkan data tersimpan' : 'Koneksi Google Sheets bermasalah' : connection === 'cloud' ? `Diperbarui ${updatedLabel} · refresh 30 detik` : 'Menunggu koneksi Google Sheets'}</span></div>
-      <div className="table-scroll public-summary-scroll"><table><thead><tr><th>NO</th><th>NO. PRK</th><th>URAIAN</th><th>PROGRAM</th><th>TAHUN</th><th>KETERANGAN</th><th>TOTAL AKHIR</th><th>RAB</th><th>TOTAL PA</th><th>KONTRAK</th><th>SISA PRK</th><th>TAGIHAN</th><th>TOTAL BAYAR</th><th>BELUM TERBAYAR</th></tr></thead><tbody>
-        {filteredRows.map((row, index) => <tr key={row.id}><td>{index + 1}</td><td>{row.prk || '-'}</td><td className="public-description-cell" title={row.description}>{row.description || '-'}</td><td>{row.program || '-'}</td><td>{row.year || '-'}</td><td>{notesCategory(row) || '-'}</td><td className="money-cell">{formatCurrency(row.totalFinal)}</td><td className="money-cell">{formatCurrency(row.rabTotal)}</td><td className="money-cell">{formatCurrency(row.paTotal)}</td><td className="money-cell">{formatCurrency(row.contractValue)}</td><td className="money-cell">{formatCurrency(row.prkRemaining)}</td><td className="money-cell">{formatCurrency(row.billed)}</td><td className="money-cell">{formatCurrency(row.paid)}</td><td className="money-cell">{formatCurrency(Math.max(0, Number(row.billed || 0) - Number(row.paid || 0)))}</td></tr>)}
-        {!filteredRows.length && <tr><td colSpan="14">{loading ? 'Sedang mengambil data dashboard...' : error ? error : 'Belum ada data untuk filter ini.'}</td></tr>}
+      <div className="table-scroll public-summary-scroll"><table><thead><tr><th>NO</th><th>NO. PRK</th><th>URAIAN</th><th>PROGRAM</th><th>TAHUN</th><th>KETERANGAN</th><th>TOTAL AKHIR</th><th>RAB</th><th>TOTAL PA</th><th>KONTRAK</th><th>SISA PRK</th><th>TAGIHAN</th><th>TOTAL BAYAR</th><th>BELUM TERBAYAR</th><th>PROYEKSI TAGIH</th></tr></thead><tbody>
+        {filteredRows.map((row, index) => <tr key={row.id}><td>{index + 1}</td><td>{row.prk || '-'}</td><td className="public-description-cell" title={row.description}>{row.description || '-'}</td><td>{row.program || '-'}</td><td>{row.year || '-'}</td><td>{getNotesCategory(row) || '-'}</td><td className="money-cell">{formatCurrency(row.totalFinal)}</td><td className="money-cell">{formatCurrency(row.rabTotal)}</td><td className="money-cell">{formatCurrency(row.paTotal)}</td><td className="money-cell">{formatCurrency(row.contractValue)}</td><td className="money-cell">{formatCurrency(row.prkRemaining)}</td><td className="money-cell">{formatCurrency(row.billed)}</td><td className="money-cell">{formatCurrency(row.paid)}</td><td className="money-cell">{formatCurrency(Math.max(0, Number(row.contractValue || 0) - Number(row.paid || 0)))}</td><td className="money-cell">{formatCurrency(row.projectedBilling)}</td></tr>)}
+        {!filteredRows.length && <tr><td colSpan="15">{loading ? 'Sedang mengambil data dashboard...' : error ? error : 'Belum ada data untuk filter ini.'}</td></tr>}
       </tbody></table></div>
       <div className="public-table-footer"><span>Menampilkan {filteredRows.length} dari {rows.length} baris PRK</span><span>Nomor kontrak dan vendor hanya tersedia setelah login.</span></div>
     </section>
