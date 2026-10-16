@@ -95,10 +95,13 @@ function doGet(event) {
   syncPrkRemainingColumn_(sheet)
   const values = sheet.getDataRange().getValues()
   const headers = values.shift() || []
-  const records = values.filter((row) => row.some((cell) => cell !== '')).map((row, index) => {
-    const record = { sourceRow: index + 2 }
+  const records = values.map((row, index) => ({ row, sourceRow: index + 2 }))
+    .filter(({ row }) => row.some((cell) => cell !== '')).map(({ row, sourceRow }, index) => {
+    const record = { sourceRow }
     headers.forEach((header, column) => { record[header] = row[column] === null ? '' : row[column] })
-    return toClientRecord_(record)
+    const clientRecord = toClientRecord_(record)
+    if (!record['RECORD ID']) clientRecord.legacyId = `row-${index + 2}`
+    return clientRecord
   })
   return json_({ ok: true, records, user: authorization.user })
 }
@@ -205,6 +208,10 @@ function toClientRecord_(row) {
 
 function calculatePrkRemaining_(record) {
   return (Number(record.totalFinal) || 0) - (Number(record.rabTotal) || 0) - (Number(record.paTotal) || 0)
+}
+
+function normalizeReference_(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toUpperCase()
 }
 
 function syncPrkRemainingColumn_(sheet) {
@@ -613,38 +620,57 @@ function publicDashboard_() {
   const headers = values.shift() || []
   const column = (name) => headers.indexOf(name)
   const indexes = {
-    prk: column('NO.PRK'), description: column('URAIAN'), program: column('PROGRAM'), year: column('TAHUN ANGGARAN'), notes: column('KETERANGAN'),
+    prk: column('NO.PRK'), rabNumber: column('NO.RAB'), description: column('URAIAN'), program: column('PROGRAM'), year: column('TAHUN ANGGARAN'), notes: column('KETERANGAN'),
     pagu: column('TOTAL AKHIR'), totalPrk: column('TOTAL PRK'), pa: column('TOTAL PA'), rab: column('TOTAL RAB'),
     contract: column('NILAI KONTRAK'), billed: column('TAGIHAN'), paid: column('TOTAL BAYAR'), remainingPrk: column('SISA PRK'),
     projectedBilling: column('PROYEKSI TAGIH'), recordId: column('RECORD ID'),
   }
   const finalizedPaByRecord = new Map()
+  const finalizedPaByRab = new Map()
+  const finalizedPaByPrk = new Map()
   const transferSheet = getWorkflowSheet_(WORKFLOW_SHEETS.paTransfers)
   readWorkflowRecords_('paTransfers', transferSheet, false).forEach((transfer) => {
     const recordId = String(transfer.recordId || '')
     const paAfter = Number(transfer.paAfter)
-    if (recordId && Number.isFinite(paAfter)) {
-      finalizedPaByRecord.set(recordId, Math.max(finalizedPaByRecord.get(recordId) || 0, paAfter))
-    }
+    if (!Number.isFinite(paAfter)) return
+    if (recordId) finalizedPaByRecord.set(recordId, Math.max(finalizedPaByRecord.get(recordId) || 0, paAfter))
+    const rabNumber = normalizeReference_(transfer.rabNumber)
+    const prk = normalizeReference_(transfer.prk)
+    if (rabNumber) finalizedPaByRab.set(rabNumber, Math.max(finalizedPaByRab.get(rabNumber) || 0, paAfter))
+    if (prk) finalizedPaByPrk.set(prk, Math.max(finalizedPaByPrk.get(prk) || 0, paAfter))
   })
   const groups = new Map()
   const rows = values.map((row, index) => ({ row, sourceRow: index + 2 }))
-    .filter(({ row }) => row.some((cell) => cell !== '')
-      && indexes.pagu >= 0 && Number(row[indexes.pagu]) > 0).map(({ row, sourceRow }) => {
+    .filter(({ row }) => row.some((cell) => cell !== '')).map(({ row, sourceRow }, index) => {
     const value = (index) => index >= 0 ? row[index] : ''
     const number = (index) => index >= 0 ? Number(row[index]) || 0 : 0
-    const recordId = String(value(indexes.recordId) || `row-${sourceRow}`)
-    const paTotal = Math.max(number(indexes.pa), finalizedPaByRecord.get(recordId) || 0)
+    const storedRecordId = String(value(indexes.recordId) || '')
+    const recordId = storedRecordId || `row-${sourceRow}`
+    const legacyRecordId = storedRecordId ? '' : `row-${index + 2}`
+    const rabNumber = normalizeReference_(value(indexes.rabNumber))
+    const prk = normalizeReference_(value(indexes.prk))
+    const finalizedPa = finalizedPaByRecord.get(recordId)
+      ?? (legacyRecordId ? finalizedPaByRecord.get(legacyRecordId) : undefined)
+      ?? finalizedPaByRab.get(rabNumber)
+      ?? finalizedPaByPrk.get(prk)
+      ?? 0
+    const paTotal = Math.max(number(indexes.pa), finalizedPa)
+    const paFinalized = finalizedPaByRecord.has(recordId)
+      || Boolean(legacyRecordId && finalizedPaByRecord.has(legacyRecordId))
+      || finalizedPaByRab.has(rabNumber)
+      || finalizedPaByPrk.has(prk)
     return {
-      prk: String(value(indexes.prk) || ''), description: String(value(indexes.description) || ''),
+      prk: String(value(indexes.prk) || ''), rabNumber: String(value(indexes.rabNumber) || ''),
+      description: String(value(indexes.description) || ''),
       program: String(value(indexes.program) || 'Program lain'), year: String(value(indexes.year) || ''),
       notes: String(value(indexes.notes) || ''), totalFinal: number(indexes.pagu), totalPrk: number(indexes.totalPrk),
-      rabTotal: number(indexes.rab), paTotal, contractValue: number(indexes.contract),
+      rabTotal: number(indexes.rab), paTotal, paFinalized, contractValue: number(indexes.contract),
       billed: number(indexes.billed), paid: number(indexes.paid),
       prkRemaining: number(indexes.pagu) - number(indexes.rab) - paTotal,
       projectedBilling: number(indexes.projectedBilling),
     }
-  }).filter((record) => record.prk.trim())
+  }).filter((record) => (record.prk.trim() || record.rabNumber.trim())
+    && (record.totalFinal > 0 || (record.paFinalized && record.paTotal > 0)))
   rows.forEach((record) => {
     const program = record.program
     const year = record.year
@@ -836,7 +862,8 @@ function transferToPA_(payload) {
     const paIndex = headers.indexOf('TOTAL PA')
     const contractIndex = headers.indexOf('NILAI KONTRAK')
     const remainingIndex = headers.indexOf('SISA PRK')
-    if (rabIndex < 0 || paIndex < 0 || contractIndex < 0 || remainingIndex < 0) throw new Error('Kolom TOTAL RAB, TOTAL PA, NILAI KONTRAK, atau SISA PRK tidak ditemukan.')
+    const recordIdIndex = headers.indexOf('RECORD ID')
+    if (rabIndex < 0 || paIndex < 0 || contractIndex < 0 || remainingIndex < 0 || recordIdIndex < 0) throw new Error('Kolom TOTAL RAB, TOTAL PA, NILAI KONTRAK, SISA PRK, atau RECORD ID tidak ditemukan.')
 
     let targetRow = -1
     let target = null
@@ -856,6 +883,7 @@ function transferToPA_(payload) {
     const previousPA = Number(target.paTotal) || 0
     if (amount > previousRab + 0.000001) throw new Error(`Nilai transfer melebihi sisa RAB ${previousRab}.`)
 
+    const previousRecordId = values[targetRow - 2][recordIdIndex] || ''
     const nextRab = Math.max(0, previousRab - amount)
     const nextPA = previousPA + amount
     const previousContract = Number(target.contractValue) || 0
@@ -865,6 +893,7 @@ function transferToPA_(payload) {
       sheet.getRange(targetRow, paIndex + 1).setValue(nextPA)
       sheet.getRange(targetRow, contractIndex + 1).setValue(nextPA)
       sheet.getRange(targetRow, remainingIndex + 1).setValue(nextRemaining)
+      if (!previousRecordId) sheet.getRange(targetRow, recordIdIndex + 1).setValue(target.id)
       const transfer = {
         id: Utilities.getUuid(), recordId: target.id, prk: target.prk, rabNumber: target.rabNumber,
         criteria: payload.criteria || '', description: target.description || '', date: payload.date || new Date().toISOString().slice(0, 10),
@@ -878,6 +907,7 @@ function transferToPA_(payload) {
       sheet.getRange(targetRow, paIndex + 1).setValue(previousPA)
       sheet.getRange(targetRow, contractIndex + 1).setValue(previousContract)
       sheet.getRange(targetRow, remainingIndex + 1).setValue(calculatePrkRemaining_(target))
+      if (!previousRecordId) sheet.getRange(targetRow, recordIdIndex + 1).setValue('')
       throw error
     }
   } finally {

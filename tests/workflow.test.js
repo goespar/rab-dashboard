@@ -103,21 +103,35 @@ test('summarizes public dashboard totals and percentages per investment category
   assert.equal(summary.percentages.categories.murni.paid, 50 / 200 * 100)
 })
 
+test('includes finalized PA when total final is blank', () => {
+  const summary = summarizePublicDashboard([
+    { totalFinal: '', rabTotal: 0, paTotal: 450, paFinalized: true, notes: 'MURNI' },
+  ])
+
+  assert.equal(summary.totals.count, 1)
+  assert.equal(summary.totals.ai, 0)
+  assert.equal(summary.totals.pa, 450)
+  assert.equal(summary.categories.murni.pa, 450)
+})
+
 test('restores blank PA totals from finalized transfer history', () => {
   const records = [
     { id: 'record-1', paTotal: 0, totalFinal: 1000, notes: 'MURNI' },
-    { id: 'record-2', paTotal: 250 },
+    { id: 'record-2', legacyId: 'old-row-2', paTotal: 250 },
+    { id: 'record-3', rabNumber: 'RAB-42', paTotal: 0, totalFinal: 500, notes: 'LANJUTAN' },
   ]
   const transfers = [
     { recordId: 'record-1', paAfter: 300 },
     { recordId: 'record-1', paAfter: 100 },
-    { recordId: 'record-2', paAfter: 200 },
+    { recordId: 'old-row-2', paAfter: 200 },
+    { recordId: 'old-row-id', rabNumber: '  rab-42 ', paAfter: 450 },
   ]
   const restored = applyFinalizedPaBalances(records, transfers)
 
   assert.equal(restored[0].paTotal, 300)
   assert.equal(restored[1].paTotal, 250)
-  assert.equal(summarizePublicDashboard(restored).totals.pa, 300)
+  assert.equal(restored[2].paTotal, 450)
+  assert.equal(summarizePublicDashboard(restored).totals.pa, 1000)
 })
 
 test('transfers PA against the matching row ID and rejects overspending', async () => {
@@ -160,7 +174,7 @@ test('transfers PA against the matching row ID and rejects overspending', async 
   }
 
   const headers = ['NO.PRK', 'NO.RAB', 'URAIAN', 'TOTAL AKHIR', 'TOTAL RAB', 'TOTAL PA', 'NILAI KONTRAK', 'SISA PRK', 'RECORD ID', 'PROGRAM', 'TAHUN ANGGARAN', 'KETERANGAN']
-  const dataSheet = new MockSheet([headers, ['PRK-1', 'RAB-42', 'Paket A', 1500, 1000, 200, 200, 300, 'DATAANGGARANINVESTASI-row-2', 'SAR', 2026, 'MURNI']])
+  const dataSheet = new MockSheet([headers, ['PRK-1', 'RAB-42', 'Paket A', 1500, 1000, 200, 200, 300, '', 'SAR', 2026, 'MURNI']])
   const sheets = { RABData: dataSheet }
   const spreadsheet = {
     getSheetByName: (name) => sheets[name] || null,
@@ -182,9 +196,9 @@ test('transfers PA against the matching row ID and rejects overspending', async 
   context.authorize_ = () => ({ ok: true, user: { id: 'test-admin', username: 'admin', role: 'admin', name: 'Test Admin' } })
   const post = (payload) => JSON.parse(context.doPost({ postData: { contents: JSON.stringify(payload) } }).text)
 
-  const result = post({ action: 'transferToPA', recordId: 'DATAANGGARANINVESTASI-row-2', amount: 300, date: '2026-09-26' })
+  const result = post({ action: 'transferToPA', recordId: 'row-2', amount: 300, date: '2026-09-26' })
   assert.equal(result.ok, true, result.error)
-  assert.equal(result.record.id, 'DATAANGGARANINVESTASI-row-2')
+  assert.equal(result.record.id, 'row-2')
   assert.equal(result.record.rabTotal, 700)
   assert.equal(result.record.paTotal, 500)
   assert.equal(result.record.contractValue, 500)
@@ -192,18 +206,34 @@ test('transfers PA against the matching row ID and rejects overspending', async 
   assert.equal(result.transfer.contractValue, 500)
   assert.equal(dataValue('NILAI KONTRAK'), 500)
   assert.equal(dataValue('SISA PRK'), 300)
+  assert.equal(dataValue('RECORD ID'), 'row-2')
   const paColumn = headers.indexOf('TOTAL PA')
+  const paguColumn = headers.indexOf('TOTAL AKHIR')
+  const rabColumn = headers.indexOf('TOTAL RAB')
+  const recordIdColumn = headers.indexOf('RECORD ID')
+  const prkColumn = headers.indexOf('NO.PRK')
   dataSheet.values[1][paColumn] = 0
+  dataSheet.values[1][paguColumn] = ''
+  dataSheet.values[1][rabColumn] = 0
+  dataSheet.values[1][recordIdColumn] = 'stale-row-id'
+  dataSheet.values[1][prkColumn] = ''
   const publicSummary = context.publicDashboard_()
+  assert.equal(publicSummary.rows.length, 1)
+  assert.equal(publicSummary.rows[0].rabNumber, 'RAB-42')
   assert.equal(publicSummary.rows[0].paTotal, 500)
+  assert.equal(publicSummary.rows[0].paFinalized, true)
   assert.equal(publicSummary.groups[0].pa, 500)
   dataSheet.values[1][paColumn] = 500
+  dataSheet.values[1][paguColumn] = 1500
+  dataSheet.values[1][rabColumn] = 700
+  dataSheet.values[1][recordIdColumn] = 'row-2'
+  dataSheet.values[1][prkColumn] = 'PRK-1'
   const transferHeaders = sheets.PA_TRANSFERS.values[0]
   assert.equal(sheets.PA_TRANSFERS.values.length, 2)
   assert.equal(transferHeaders.includes('DATA_JSON'), false)
   assert.equal(sheets.PA_TRANSFERS.values[1][transferHeaders.indexOf('Nilai Dialihkan (Rp)')], 300)
 
-  const rejected = post({ action: 'transferToPA', recordId: 'DATAANGGARANINVESTASI-row-2', amount: 701 })
+  const rejected = post({ action: 'transferToPA', recordId: 'row-2', amount: 701 })
   assert.equal(rejected.ok, false)
   assert.equal(dataValue('TOTAL RAB'), 700)
   assert.equal(dataValue('TOTAL PA'), 500)
@@ -213,9 +243,9 @@ test('transfers PA against the matching row ID and rejects overspending', async 
   const saved = post({ action: 'save', records: [result.record] })
   assert.equal(saved.ok, true)
   const loaded = JSON.parse(context.doGet({ parameter: { action: 'load' } }).text)
-  assert.equal(loaded.records[0].id, 'DATAANGGARANINVESTASI-row-2')
+  assert.equal(loaded.records[0].id, 'row-2')
 
-  const later = post({ action: 'transferToPA', recordId: 'DATAANGGARANINVESTASI-row-2', amount: 100 })
+  const later = post({ action: 'transferToPA', recordId: 'row-2', amount: 100 })
   assert.equal(later.ok, true, later.error)
   assert.equal(dataValue('TOTAL RAB'), 600)
   assert.equal(dataValue('TOTAL PA'), 600)
@@ -245,6 +275,46 @@ test('transfers PA against the matching row ID and rejects overspending', async 
   assert.equal(dataValue('NILAI KONTRAK'), 200)
   assert.equal(dataValue('SISA PRK'), 300)
   assert.equal(sheets.PA_TRANSFERS.values.length, 1)
+})
+
+test('preserves physical row IDs when loading data around blank sheet rows', async () => {
+  class MockSheet {
+    constructor(values) { this.values = values }
+    getDataRange() { return { getValues: () => this.values.map((row) => [...row]) } }
+    getRange(row, column) {
+      return {
+        setValues: (rows) => rows.forEach((values, rowIndex) => {
+          this.values[row - 1 + rowIndex] ??= []
+          values.forEach((value, columnIndex) => { this.values[row - 1 + rowIndex][column - 1 + columnIndex] = value })
+        }),
+      }
+    }
+  }
+
+  const headers = ['NO.PRK', 'NO.RAB', 'URAIAN', 'RECORD ID']
+  const blankRow = Array(headers.length).fill('')
+  const dataSheet = new MockSheet([
+    headers,
+    ['PRK-1', 'RAB-1', 'Paket A', ''],
+    blankRow,
+    ['PRK-2', 'RAB-2', 'Paket B', ''],
+  ])
+  const spreadsheet = { getSheetByName: () => dataSheet }
+  const context = {
+    SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: () => '' }) },
+    ContentService: {
+      MimeType: { JSON: 'application/json' },
+      createTextOutput: (text) => ({ text, setMimeType() { return this } }),
+    },
+  }
+  const script = await readFile(new URL('../apps-script/Code.gs', import.meta.url), 'utf8')
+  vm.runInNewContext(script, context)
+  context.authorize_ = () => ({ ok: true, user: { id: 'test-admin', role: 'admin' } })
+  context.syncPrkRemainingColumn_ = () => {}
+
+  const response = JSON.parse(context.doGet({ parameter: { action: 'load', token: 'test' } }).text)
+  assert.deepEqual(response.records.map(({ id }) => id), ['row-2', 'row-4'])
 })
 
 test('syncs realization billing and payment totals to matching RABData rows', async () => {

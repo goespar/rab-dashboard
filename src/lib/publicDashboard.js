@@ -20,21 +20,36 @@ function percent(value, denominator) {
   return denominator > 0 ? value / denominator * 100 : 0
 }
 
+function normalizeReference(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toUpperCase()
+}
+
 export function applyFinalizedPaBalances(records, transfers) {
   const finalizedPaByRecord = new Map()
+  const finalizedPaByRab = new Map()
+  const finalizedPaByPrk = new Map()
   transfers.forEach((transfer) => {
     const recordId = String(transfer.recordId || '')
     const paAfter = Number(transfer.paAfter)
-    if (recordId && Number.isFinite(paAfter)) {
-      finalizedPaByRecord.set(recordId, Math.max(finalizedPaByRecord.get(recordId) || 0, paAfter))
-    }
+    if (!Number.isFinite(paAfter)) return
+    if (recordId) finalizedPaByRecord.set(recordId, Math.max(finalizedPaByRecord.get(recordId) || 0, paAfter))
+    const rabNumber = normalizeReference(transfer.rabNumber)
+    const prk = normalizeReference(transfer.prk)
+    if (rabNumber) finalizedPaByRab.set(rabNumber, Math.max(finalizedPaByRab.get(rabNumber) || 0, paAfter))
+    if (prk) finalizedPaByPrk.set(prk, Math.max(finalizedPaByPrk.get(prk) || 0, paAfter))
   })
   return records.map((record) => {
     const finalizedPa = finalizedPaByRecord.get(String(record.id || ''))
+      ?? finalizedPaByRecord.get(String(record.legacyId || ''))
+      ?? finalizedPaByRab.get(normalizeReference(record.rabNumber))
+      ?? finalizedPaByPrk.get(normalizeReference(record.prk))
     const currentPa = Number(record.paTotal) || 0
-    return finalizedPa === undefined || finalizedPa <= currentPa
-      ? record
-      : { ...record, paTotal: finalizedPa }
+    if (finalizedPa === undefined) return record
+    return {
+      ...record,
+      ...(finalizedPa > currentPa ? { paTotal: finalizedPa } : {}),
+      paFinalized: true,
+    }
   })
 }
 
@@ -43,7 +58,7 @@ export function summarizePublicDashboard(rows) {
   const categories = { murni: emptyMetrics(), lanjutan: emptyMetrics() }
 
   rows.forEach((row) => {
-    if (row.totalFinal === '' || row.totalFinal === null || row.totalFinal === undefined) return
+    if (number(row.totalFinal) <= 0 && !(row.paFinalized && number(row.paTotal) > 0)) return
     const values = {
       ai: number(row.totalFinal),
       rab: number(row.rabTotal),
