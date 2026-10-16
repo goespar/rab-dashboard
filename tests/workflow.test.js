@@ -7,6 +7,7 @@ import vm from 'node:vm'
 import ExcelJS from 'exceljs'
 import appsScriptHandler from '../api/apps-script.js'
 import { importWorkbook, parseNumber } from '../src/lib/workbook.js'
+import { applyFinalizedPaBalances, summarizePublicDashboard } from '../src/lib/publicDashboard.js'
 
 test('imports No. RAB-only rows with distinct sheet row IDs', async () => {
   const workbook = new ExcelJS.Workbook()
@@ -56,6 +57,69 @@ test('calculates remaining PRK from total final, RAB, and PA when importing', as
   assert.equal(result.records[0].prkRemaining, 500)
 })
 
+test('imports schedule columns AA-AG and keeps blank AI totals empty', async () => {
+  const workbook = new ExcelJS.Workbook()
+  const sheet = workbook.addWorksheet('DATA ANGGARAN INVESTASI')
+  sheet.addRow([
+    'NO.PRK', 'URAIAN', 'TOTAL AKHIR', 'TOTAL RAB', 'TOTAL PA', 'NILAI KONTRAK', 'TAGIHAN', 'TOTAL BAYAR',
+    'KETERANGAN', 'TANGGAL AWAL', 'TANGGAL AKHIR', 'RENCANA KONTRAK', 'RENCANA TAGIH', 'PROGRESS', 'PROYEKSI TAGIH', 'TANGGAL BAYAR',
+  ])
+  sheet.addRow([
+    'PRK-1', 'Paket A', 1000, 100, 200, 600, 150, 50, 'MURNI',
+    new Date(2026, 0, 15), new Date(2026, 5, 30), 700, 150, 'BELUM LUNAS', 500, new Date(2026, 6, 1),
+  ])
+  sheet.addRow(['PRK-1', 'Detail paket', '', 0, 0, 0, 0, 0, 'MURNI'])
+  for (const address of ['J2', 'K2', 'P2']) sheet.getCell(address).numFmt = 'dd/mm/yyyy'
+  const buffer = await workbook.xlsx.writeBuffer()
+  const result = await importWorkbook({
+    arrayBuffer: async () => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+  })
+
+  assert.equal(result.records[0].startDate, '2026-01-15')
+  assert.equal(result.records[0].endDate, '2026-06-30')
+  assert.equal(result.records[0].plannedContract, 700)
+  assert.equal(result.records[0].plannedBilling, 150)
+  assert.equal(result.records[0].progress, 'BELUM LUNAS')
+  assert.equal(result.records[0].projectedBilling, 500)
+  assert.equal(result.records[0].paymentDate, '2026-07-01')
+  assert.equal(result.records[1].totalFinal, '')
+})
+
+test('summarizes public dashboard totals and percentages per investment category', () => {
+  const summary = summarizePublicDashboard([
+    { totalFinal: 1000, rabTotal: 100, paTotal: 300, contractValue: 200, billed: 100, paid: 50, prkRemaining: 600, notes: 'MURNI' },
+    { totalFinal: 3000, rabTotal: 200, paTotal: 500, contractValue: 1000, billed: 400, paid: 200, prkRemaining: 2300, notes: 'LANJUTAN' },
+    { totalFinal: '', totalPrk: 50000, rabTotal: 50000, notes: 'MURNI' },
+  ])
+
+  assert.deepEqual(summary.totals, {
+    count: 2, ai: 4000, rab: 300, pa: 800, contract: 1200, billed: 500, paid: 250, remainingPrk: 2900, projectedBilling: 0,
+  })
+  assert.equal(summary.categories.murni.ai, 1000)
+  assert.equal(summary.categories.lanjutan.ai, 3000)
+  assert.equal(summary.percentages.ai.murni, 25)
+  assert.equal(summary.percentages.categories.lanjutan.pa, 500 / 3000 * 100)
+  assert.equal(summary.percentages.totals.billed, 500 / 1200 * 100)
+  assert.equal(summary.percentages.categories.murni.paid, 50 / 200 * 100)
+})
+
+test('restores blank PA totals from finalized transfer history', () => {
+  const records = [
+    { id: 'record-1', paTotal: 0, totalFinal: 1000, notes: 'MURNI' },
+    { id: 'record-2', paTotal: 250 },
+  ]
+  const transfers = [
+    { recordId: 'record-1', paAfter: 300 },
+    { recordId: 'record-1', paAfter: 100 },
+    { recordId: 'record-2', paAfter: 200 },
+  ]
+  const restored = applyFinalizedPaBalances(records, transfers)
+
+  assert.equal(restored[0].paTotal, 300)
+  assert.equal(restored[1].paTotal, 250)
+  assert.equal(summarizePublicDashboard(restored).totals.pa, 300)
+})
+
 test('transfers PA against the matching row ID and rejects overspending', async () => {
   class MockSheet {
     constructor(values = []) {
@@ -95,8 +159,8 @@ test('transfers PA against the matching row ID and rejects overspending', async 
     }
   }
 
-  const headers = ['NO.PRK', 'NO.RAB', 'URAIAN', 'TOTAL AKHIR', 'TOTAL RAB', 'TOTAL PA', 'NILAI KONTRAK', 'SISA PRK', 'RECORD ID']
-  const dataSheet = new MockSheet([headers, ['', 'RAB-42', 'Paket A', 1500, 1000, 200, 200, 300, 'DATAANGGARANINVESTASI-row-2']])
+  const headers = ['NO.PRK', 'NO.RAB', 'URAIAN', 'TOTAL AKHIR', 'TOTAL RAB', 'TOTAL PA', 'NILAI KONTRAK', 'SISA PRK', 'RECORD ID', 'PROGRAM', 'TAHUN ANGGARAN', 'KETERANGAN']
+  const dataSheet = new MockSheet([headers, ['PRK-1', 'RAB-42', 'Paket A', 1500, 1000, 200, 200, 300, 'DATAANGGARANINVESTASI-row-2', 'SAR', 2026, 'MURNI']])
   const sheets = { RABData: dataSheet }
   const spreadsheet = {
     getSheetByName: (name) => sheets[name] || null,
@@ -128,6 +192,12 @@ test('transfers PA against the matching row ID and rejects overspending', async 
   assert.equal(result.transfer.contractValue, 500)
   assert.equal(dataValue('NILAI KONTRAK'), 500)
   assert.equal(dataValue('SISA PRK'), 300)
+  const paColumn = headers.indexOf('TOTAL PA')
+  dataSheet.values[1][paColumn] = 0
+  const publicSummary = context.publicDashboard_()
+  assert.equal(publicSummary.rows[0].paTotal, 500)
+  assert.equal(publicSummary.groups[0].pa, 500)
+  dataSheet.values[1][paColumn] = 500
   const transferHeaders = sheets.PA_TRANSFERS.values[0]
   assert.equal(sheets.PA_TRANSFERS.values.length, 2)
   assert.equal(transferHeaders.includes('DATA_JSON'), false)
@@ -189,7 +259,10 @@ test('syncs realization billing and payment totals to matching RABData rows', as
           this.values[row - 1] ??= []
           this.values[row - 1][column - 1] = value
         },
-        setValues: (rows) => rows.forEach((values, index) => { this.values[row - 1 + index] = values }),
+        setValues: (rows) => rows.forEach((values, rowIndex) => {
+          this.values[row - 1 + rowIndex] ??= []
+          values.forEach((value, columnIndex) => { this.values[row - 1 + rowIndex][column - 1 + columnIndex] = value })
+        }),
       }
     }
   }
@@ -386,12 +459,13 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
     deleteRow(row) { this.values.splice(row - 1, 1) }
   }
 
-  const headers = ['NO.PRK', 'URAIAN', 'TOTAL AKHIR', 'TOTAL PRK', 'TOTAL RAB', 'TOTAL PA', 'NILAI KONTRAK', 'TAGIHAN', 'TOTAL BAYAR', 'SISA PRK', 'PROGRAM', 'TAHUN ANGGARAN', 'RECORD ID']
+  const headers = ['NO.PRK', 'URAIAN', 'TOTAL AKHIR', 'TOTAL PRK', 'TOTAL RAB', 'TOTAL PA', 'NILAI KONTRAK', 'TAGIHAN', 'TOTAL BAYAR', 'SISA PRK', 'PROGRAM', 'TAHUN ANGGARAN', 'KETERANGAN', 'TANGGAL AWAL', 'TANGGAL AKHIR', 'RENCANA KONTRAK', 'RENCANA TAGIH', 'PROGRESS', 'PROYEKSI TAGIH', 'TANGGAL BAYAR', 'RECORD ID']
   const dataSheet = new MockSheet([
     headers,
-    ['PRK-SECRET', 'Uraian rahasia', 1000, 1000, 500, 250, 250, 100, 50, 450, 'Program A', 2026, 'record-1'],
-    ['PRK-SECOND', 'Uraian kedua', 2000, 2000, 900, 600, 550, 200, 150, 1100, 'Program B', 2027, 'record-2'],
-    ['', 'Baris tanpa PRK', 9999, 9999, 9999, 9999, 9999, 9999, 9999, 9999, 'Program A', 2026, 'record-no-prk'],
+    ['PRK-SECRET', 'Uraian rahasia', 1000, 1000, 500, 250, 250, 100, 50, 450, 'Program A', 2026, 'MURNI', '2026-01-15', '2026-06-30', 700, 150, 'BELUM LUNAS', 75, '2026-07-01', 'record-1'],
+    ['PRK-SECOND', 'Uraian kedua', 2000, 2000, 900, 600, 550, 200, 150, 1100, 'Program B', 2027, 'LANJUTAN', '', '', 0, 0, 'LUNAS', 125, '', 'record-2'],
+    ['PRK-DETAIL', 'Detail paket', '', 1000, 1000, 1000, 1000, 1000, 0, 0, 'Program A', 2026, 'MURNI', '', '', 0, 0, 'BELUM LUNAS', 999, '', 'record-detail'],
+    ['', 'Baris tanpa PRK', 9999, 9999, 9999, 9999, 9999, 9999, 9999, 9999, 'Program A', 2026, 'MURNI', '', '', 0, 0, 'BELUM LUNAS', 999, '', 'record-no-prk'],
   ])
   const sheets = { RABData: dataSheet }
   const spreadsheet = {
@@ -451,6 +525,7 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
   assert.equal(publicResponse.summary.rows.length, 2)
   assert.equal(publicResponse.summary.groups.find((group) => group.program === 'Program A').pagu, 1000)
   assert.equal(publicResponse.summary.rows[0].prk, 'PRK-SECRET')
+  assert.equal(publicResponse.summary.rows[0].projectedBilling, 75)
   assert.equal(publicResponse.summary.rows[0].description, 'Uraian rahasia')
   assert.equal(publicResponse.summary.rows[0].prkRemaining, 250)
   assert.equal(dataSheet.values[1][headers.indexOf('SISA PRK')], 450)
@@ -487,6 +562,12 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
   const privateData = JSON.parse(context.doGet({ parameter: { action: 'load', token: admin.token } }).text)
   assert.equal(privateData.records[0].prk, 'PRK-SECRET')
   assert.equal(privateData.records[0].prkRemaining, 250)
+  assert.equal(privateData.records[0].startDate, '2026-01-15')
+  assert.equal(privateData.records[0].plannedContract, 700)
+  assert.equal(privateData.records[0].plannedBilling, 150)
+  assert.equal(privateData.records[0].progress, 'BELUM LUNAS')
+  assert.equal(privateData.records[0].projectedBilling, 75)
+  assert.equal(privateData.records[0].paymentDate, '2026-07-01')
   assert.equal(dataSheet.values[1][headers.indexOf('SISA PRK')], 250)
 
   context.authStatus_()

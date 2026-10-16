@@ -616,20 +616,32 @@ function publicDashboard_() {
     prk: column('NO.PRK'), description: column('URAIAN'), program: column('PROGRAM'), year: column('TAHUN ANGGARAN'), notes: column('KETERANGAN'),
     pagu: column('TOTAL AKHIR'), totalPrk: column('TOTAL PRK'), pa: column('TOTAL PA'), rab: column('TOTAL RAB'),
     contract: column('NILAI KONTRAK'), billed: column('TAGIHAN'), paid: column('TOTAL BAYAR'), remainingPrk: column('SISA PRK'),
-    projectedBilling: column('PROYEKSI TAGIH'),
+    projectedBilling: column('PROYEKSI TAGIH'), recordId: column('RECORD ID'),
   }
+  const finalizedPaByRecord = new Map()
+  const transferSheet = getWorkflowSheet_(WORKFLOW_SHEETS.paTransfers)
+  readWorkflowRecords_('paTransfers', transferSheet, false).forEach((transfer) => {
+    const recordId = String(transfer.recordId || '')
+    const paAfter = Number(transfer.paAfter)
+    if (recordId && Number.isFinite(paAfter)) {
+      finalizedPaByRecord.set(recordId, Math.max(finalizedPaByRecord.get(recordId) || 0, paAfter))
+    }
+  })
   const groups = new Map()
-  const rows = values.filter((row) => row.some((cell) => cell !== '')
-    && indexes.pagu >= 0 && Number(row[indexes.pagu]) > 0).map((row) => {
+  const rows = values.map((row, index) => ({ row, sourceRow: index + 2 }))
+    .filter(({ row }) => row.some((cell) => cell !== '')
+      && indexes.pagu >= 0 && Number(row[indexes.pagu]) > 0).map(({ row, sourceRow }) => {
     const value = (index) => index >= 0 ? row[index] : ''
     const number = (index) => index >= 0 ? Number(row[index]) || 0 : 0
+    const recordId = String(value(indexes.recordId) || `row-${sourceRow}`)
+    const paTotal = Math.max(number(indexes.pa), finalizedPaByRecord.get(recordId) || 0)
     return {
       prk: String(value(indexes.prk) || ''), description: String(value(indexes.description) || ''),
       program: String(value(indexes.program) || 'Program lain'), year: String(value(indexes.year) || ''),
       notes: String(value(indexes.notes) || ''), totalFinal: number(indexes.pagu), totalPrk: number(indexes.totalPrk),
-      rabTotal: number(indexes.rab), paTotal: number(indexes.pa), contractValue: number(indexes.contract),
+      rabTotal: number(indexes.rab), paTotal, contractValue: number(indexes.contract),
       billed: number(indexes.billed), paid: number(indexes.paid),
-      prkRemaining: number(indexes.pagu) - number(indexes.rab) - number(indexes.pa),
+      prkRemaining: number(indexes.pagu) - number(indexes.rab) - paTotal,
       projectedBilling: number(indexes.projectedBilling),
     }
   }).filter((record) => record.prk.trim())

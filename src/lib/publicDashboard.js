@@ -20,6 +20,24 @@ function percent(value, denominator) {
   return denominator > 0 ? value / denominator * 100 : 0
 }
 
+export function applyFinalizedPaBalances(records, transfers) {
+  const finalizedPaByRecord = new Map()
+  transfers.forEach((transfer) => {
+    const recordId = String(transfer.recordId || '')
+    const paAfter = Number(transfer.paAfter)
+    if (recordId && Number.isFinite(paAfter)) {
+      finalizedPaByRecord.set(recordId, Math.max(finalizedPaByRecord.get(recordId) || 0, paAfter))
+    }
+  })
+  return records.map((record) => {
+    const finalizedPa = finalizedPaByRecord.get(String(record.id || ''))
+    const currentPa = Number(record.paTotal) || 0
+    return finalizedPa === undefined || finalizedPa <= currentPa
+      ? record
+      : { ...record, paTotal: finalizedPa }
+  })
+}
+
 export function summarizePublicDashboard(rows) {
   const totals = emptyMetrics()
   const categories = { murni: emptyMetrics(), lanjutan: emptyMetrics() }

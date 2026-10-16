@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { exportWorkbook, formatCurrency, importWorkbook, parseRupiahPrice, sampleRecords } from './lib/workbook.js'
-import { summarizePublicDashboard } from './lib/publicDashboard.js'
+import { applyFinalizedPaBalances, summarizePublicDashboard } from './lib/publicDashboard.js'
 import RabWorkflow from './RabWorkflow.jsx'
 import './App.css'
 import './pln-theme.css'
@@ -22,7 +22,7 @@ const WORKFLOW_NAV = [
   { id: 'activityCatalog', label: 'Master Kegiatan', icon: ClipboardList },
   { id: 'components', label: 'RAB Komponen', icon: Wrench },
   { id: 'activities', label: 'RAB Kegiatan', icon: ClipboardList },
-  { id: 'paFinalization', label: 'Finalisasi ke PA', icon: ArrowDownToLine },
+  { id: 'paFinalization', collection: 'paTransfers', label: 'Finalisasi ke PA', icon: ArrowDownToLine },
   { id: 'contracts', label: 'Data Kontrak', icon: FileText },
   { id: 'realizations', label: 'Realisasi', icon: Activity },
 ]
@@ -270,17 +270,21 @@ function App() {
   }, [notice, logoutPending])
 
   const years = YEAR_OPTIONS
-  const programs = useMemo(() => [...new Set(records.map((record) => record.program).filter(Boolean))].sort(), [records])
-  const dashboardRecords = useMemo(() => records.filter((record) =>
+  const recordsWithFinalizedPa = useMemo(
+    () => applyFinalizedPaBalances(records, workflowCollections.paTransfers || []),
+    [records, workflowCollections.paTransfers],
+  )
+  const programs = useMemo(() => [...new Set(recordsWithFinalizedPa.map((record) => record.program).filter(Boolean))].sort(), [recordsWithFinalizedPa])
+  const dashboardRecords = useMemo(() => recordsWithFinalizedPa.filter((record) =>
     (selectedYear === 'all' || String(record.year) === selectedYear)
       && (selectedProgram === 'all' || record.program === selectedProgram)
       && (selectedNotesCategory === 'all' || getNotesCategory(record) === selectedNotesCategory)
-  ), [records, selectedYear, selectedProgram, selectedNotesCategory])
+  ), [recordsWithFinalizedPa, selectedYear, selectedProgram, selectedNotesCategory])
   const investmentSummary = useMemo(() => summarizePublicDashboard(dashboardRecords), [dashboardRecords])
-  const contractRecords = useMemo(() => records.filter((record) => Number(record.paTotal) > 0
+  const contractRecords = useMemo(() => recordsWithFinalizedPa.filter((record) => Number(record.paTotal) > 0
     || hasContractNumber(record)
     || String(record.vendor ?? '').trim().length > 0
-    || Number(record.contractValue) > 0), [records])
+    || Number(record.contractValue) > 0), [recordsWithFinalizedPa])
   const budgetSummaryRecords = useMemo(() => dashboardRecords.filter((record) => !hasContractNumber(record)), [dashboardRecords])
   const contractDetailRecords = useMemo(() => dashboardRecords.filter(hasContractNumber), [dashboardRecords])
   const filteredRecords = useMemo(() => dashboardRecords.filter((record) => {
@@ -325,20 +329,6 @@ function App() {
     })
     return Object.values(groups).sort((a, b) => b.pagu - a.pagu).slice(0, 5)
   }, [auth, budgetSummaryRecords, contractDetailRecords, dashboardRecords])
-  const workflowSummary = useMemo(() => {
-    const activities = workflowCollections.activities || []
-    const realizations = workflowCollections.realizations || []
-    return {
-      rab: records.reduce((sum, record) => sum + Number(record.rabTotal || 0), 0),
-      activities: activities.length,
-      tm: activities.filter((activity) => activity.criteria === 'TM').length,
-      tr: activities.filter((activity) => activity.criteria === 'TR').length,
-      realizedVolume: realizations.reduce((sum, item) => sum + Number(item.volume || 0), 0),
-      billed: realizations.reduce((sum, item) => sum + Number(item.billed || 0), 0),
-      paid: realizations.reduce((sum, item) => sum + Number(item.paid || 0), 0),
-    }
-  }, [workflowCollections, records])
-
   async function loadAuthenticatedData(session) {
     try {
       const [dataResponse, workflowResponse] = await Promise.all([
@@ -660,7 +650,7 @@ function App() {
             const Icon = item.icon
             return <div className="nav-group" key={item.id}>
               {item.section && <div className="nav-section-label">{item.section}</div>}
-              <button className={activeView === item.id ? 'nav-item active' : 'nav-item'} onClick={() => setActiveView(item.id)}><Icon size={18} /><span>{item.label}</span><span className="nav-count">{item.id === 'contracts' ? contractRecords.length : workflowCollections[item.id]?.length || 0}</span></button>
+              <button className={activeView === item.id ? 'nav-item active' : 'nav-item'} onClick={() => setActiveView(item.id)}><Icon size={18} /><span>{item.label}</span><span className="nav-count">{item.id === 'contracts' ? contractRecords.length : workflowCollections[item.collection || item.id]?.length || 0}</span></button>
             </div>
           })}
           {auth && <button className={activeView === 'data' ? 'nav-item active' : 'nav-item'} onClick={() => setActiveView('data')}><FolderKanban size={18} /><span>Rekap RAB</span><span className="nav-count">{records.length}</span></button>}
@@ -693,16 +683,6 @@ function App() {
             </section>
 
             <AuthenticatedInvestmentSummary summary={investmentSummary} />
-
-            {auth && <section className="workflow-overview panel" aria-label="Ringkasan input RAB dan realisasi">
-              <div className="workflow-overview-heading"><div><p className="eyebrow">ALUR INPUT RAB</p><h2>RAB sampai realisasi</h2></div><button className="text-action" onClick={() => setActiveView('materials')}>Buka alur <span aria-hidden="true">-&gt;</span></button></div>
-              <div className="workflow-overview-grid">
-                <div><span>Kegiatan RAB</span><strong>{workflowSummary.activities}</strong><small>TM {workflowSummary.tm} <i /> TR {workflowSummary.tr}</small></div>
-                <div><span>Nilai RAB input</span><strong>{formatCurrency(workflowSummary.rab)}</strong><small>Hasil komponen pekerjaan</small></div>
-                <div><span>Volume realisasi</span><strong>{workflowSummary.realizedVolume}</strong><small>Total volume tercatat</small></div>
-                <div><span>Dibayar dari realisasi</span><strong>{formatCurrency(workflowSummary.paid)}</strong><small>Tagihan {formatCurrency(workflowSummary.billed)}</small></div>
-              </div>
-            </section>}
 
             <section className="analytics-grid">
               <article className="panel chart-panel"><div className="panel-heading"><div><p className="eyebrow">ALOKASI ANGGARAN</p><h2>Pagu dan nilai kontrak</h2></div><div className="legend"><span><i className="legend-swatch pagu-swatch" />Pagu</span><span><i className="legend-swatch contract-swatch" />Kontrak</span></div></div>
@@ -867,6 +847,7 @@ function PublicProgramCard({ card, selectedYear }) {
     ]
   const pieTotal = pieData.reduce((sum, item) => sum + item.value, 0)
   const metrics = continuation ? [
+    { name: 'PA', value: card.pa, percent: formatReferencePercent(card.pa, card.pagu) },
     { name: 'KONTRAK', value: card.contract, percent: formatReferencePercent(card.contract, card.pagu) },
     { name: 'TERBAYAR', value: card.paid, percent: formatReferencePercent(card.paid, card.contract) },
     { name: 'SISA', value: card.remainingPrk, percent: formatReferencePercent(card.remainingPrk, card.pagu) },
@@ -967,6 +948,7 @@ function PublicDashboard({ rows, selectedYear, setSelectedYear, updatedAt, conne
           <div><span>LANJUTAN</span><strong>{formatCurrency(categories.lanjutan.ai)}</strong><small>{formatPercent(percentages.ai.lanjutan)}</small></div>
         </div>
         <div className="public-annual-pair"><span>KONTRAK MURNI<strong>{formatCurrency(categories.murni.contract)}</strong><small>{formatReferencePercent(categories.murni.contract, categories.murni.ai, 'exact')}</small></span><span>KONTRAK LAN<strong>{formatCurrency(categories.lanjutan.contract)}</strong><small>{formatReferencePercent(categories.lanjutan.contract, categories.lanjutan.ai, 'exact')}</small></span></div>
+        <div className="public-annual-pair"><span>PA MURNI<strong>{formatCurrency(categories.murni.pa)}</strong><small>{formatReferencePercent(categories.murni.pa, categories.murni.ai, 'exact')}</small></span><span>PA LANJUTAN<strong>{formatCurrency(categories.lanjutan.pa)}</strong><small>{formatReferencePercent(categories.lanjutan.pa, categories.lanjutan.ai, 'exact')}</small></span></div>
         <div className="public-annual-pair"><span>SISA MURNI<strong>{formatCurrency(categories.murni.remainingPrk)}</strong><small>{formatReferencePercent(categories.murni.remainingPrk, categories.murni.ai, 'exact')}</small></span><span>SISA LANJUTAN<strong>{formatCurrency(categories.lanjutan.remainingPrk)}</strong><small>{formatReferencePercent(categories.lanjutan.remainingPrk, categories.lanjutan.ai, 'exact')}</small></span></div>
       </aside>
       {pureCards.length > 0 && <div className="public-program-column public-program-column--pure" aria-label="Program murni">
