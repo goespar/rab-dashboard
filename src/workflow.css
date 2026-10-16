@@ -71,15 +71,20 @@
 .workflow-materials-freeze-scroll, .workflow-catalog-freeze-scroll { max-height: 420px; overscroll-behavior: contain; }
 .workflow-materials-freeze-scroll table, .workflow-catalog-freeze-scroll table { table-layout: fixed; border-collapse: separate; border-spacing: 0; }
 .workflow-materials-freeze-scroll table { min-width: 1080px; }
-.workflow-catalog-freeze-scroll table { min-width: 1040px; }
+.workflow-catalog-freeze-scroll table { min-width: 1100px; }
 .workflow-materials-freeze-scroll th, .workflow-catalog-freeze-scroll th { position: sticky; z-index: 3; top: 0; background: #f4f7fb; }
 .workflow-actions-heading, .workflow-actions-cell { width: 80px; min-width: 80px; max-width: 80px; }
 .workflow-materials-freeze-scroll th:nth-child(2), .workflow-materials-freeze-scroll td:nth-child(2) { position: sticky; left: 0; width: 280px; min-width: 280px; max-width: 280px; }
 .workflow-materials-freeze-scroll th:nth-child(2) { z-index: 5; }
 .workflow-materials-freeze-scroll td:nth-child(2) { z-index: 2; background: #fff; white-space: normal; }
-.workflow-catalog-freeze-scroll th:first-child, .workflow-catalog-freeze-scroll td:first-child { position: sticky; left: 0; width: 280px; min-width: 280px; max-width: 280px; }
+.workflow-catalog-freeze-scroll th:first-child, .workflow-catalog-freeze-scroll td:first-child { position: sticky; left: 0; width: 300px; min-width: 300px; max-width: 300px; }
+.workflow-catalog-freeze-scroll th:nth-child(2), .workflow-catalog-freeze-scroll td:nth-child(2) { width: 300px; min-width: 300px; }
+.workflow-catalog-freeze-scroll th:nth-child(3), .workflow-catalog-freeze-scroll td:nth-child(3) { width: 80px; min-width: 80px; }
+.workflow-catalog-freeze-scroll th:nth-child(4), .workflow-catalog-freeze-scroll td:nth-child(4) { width: 90px; min-width: 90px; }
+.workflow-catalog-freeze-scroll th:nth-child(5), .workflow-catalog-freeze-scroll td:nth-child(5) { width: 250px; min-width: 250px; }
 .workflow-catalog-freeze-scroll th:first-child { z-index: 5; }
-.workflow-catalog-freeze-scroll td:first-child { z-index: 2; overflow: hidden; background: #fff; text-overflow: ellipsis; }
+.workflow-catalog-freeze-scroll td:first-child { z-index: 2; background: #fff; }
+.workflow-catalog-freeze-scroll td:nth-child(1), .workflow-catalog-freeze-scroll td:nth-child(2), .workflow-catalog-freeze-scroll td:nth-child(5) { height: auto; padding-top: 9px; padding-bottom: 9px; line-height: 1.4; vertical-align: middle; white-space: normal; overflow-wrap: anywhere; }
 .workflow-form-panel { scroll-margin-top: 76px; }
 .workflow-page.is-read-only .workflow-form-panel { display: none; }
 .workflow-page.is-read-only .workflow-layout { grid-template-columns: 1fr; }
@@ -162,7 +167,7 @@
   .workflow-segment button { min-width: 31px; }
   .workflow-table-scroll table { min-width: 760px; }
   .workflow-materials-freeze-scroll table { min-width: 1080px; }
-  .workflow-catalog-freeze-scroll table { min-width: 1040px; }
+  .workflow-catalog-freeze-scroll table { min-width: 1100px; }
   .workflow-overview { padding: 12px 10px; }
   .workflow-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px 7px; }
   .workflow-overview-grid > div { padding: 0 7px; }
