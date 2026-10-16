@@ -249,9 +249,9 @@
 .all-rekap-scroll th:nth-child(4), .all-rekap-scroll td:nth-child(4) { width: 130px; }
 .all-rekap-scroll th:nth-child(5), .all-rekap-scroll td:nth-child(5),
 .all-rekap-scroll th:nth-child(26), .all-rekap-scroll td:nth-child(26) { width: 125px; }
-.all-rekap-scroll th:nth-child(6), .all-rekap-scroll td:nth-child(6) { width: 150px; }
-.all-rekap-scroll th:nth-child(7), .all-rekap-scroll td:nth-child(7) { width: 140px; }
-.all-rekap-scroll th:nth-child(8), .all-rekap-scroll td:nth-child(8) { width: 190px; }
+.all-rekap-scroll th:nth-child(6), .all-rekap-scroll td:nth-child(6) { width: 170px; }
+.all-rekap-scroll th:nth-child(7), .all-rekap-scroll td:nth-child(7) { width: 160px; }
+.all-rekap-scroll th:nth-child(8), .all-rekap-scroll td:nth-child(8) { width: 260px; }
 .all-rekap-scroll th:nth-child(n+9):nth-child(-n+14), .all-rekap-scroll td:nth-child(n+9):nth-child(-n+14),
 .all-rekap-scroll th:nth-child(n+17):nth-child(-n+22), .all-rekap-scroll td:nth-child(n+17):nth-child(-n+22) { width: 100px; }
 .all-rekap-scroll th:nth-child(15), .all-rekap-scroll td:nth-child(15) { width: 240px; }
@@ -269,10 +269,11 @@
 .all-rekap-scroll th:nth-child(34), .all-rekap-scroll td:nth-child(34) { width: 45px; }
 .all-rekap-scroll th { height: auto; min-height: 34px; padding: 4px 6px; white-space: normal; overflow-wrap: anywhere; line-height: 1.15; }
 .all-rekap-scroll td { height: 29px; padding: 3px 6px; }
+.all-rekap-scroll td:nth-child(6), .all-rekap-scroll td:nth-child(7), .all-rekap-scroll td:nth-child(8) { padding-top: 7px; padding-bottom: 7px; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; vertical-align: middle; }
 .all-rekap-scroll td.money-cell { font-size: 9px; }
 .all-rekap-scroll td:nth-child(15), .all-rekap-scroll td:nth-child(16) { overflow: hidden; text-overflow: ellipsis; }
 .all-rekap-scroll .row-action { width: 20px; height: 20px; }
-.all-rekap-scroll td.all-rekap-description-cell { overflow: hidden; text-overflow: ellipsis; }
+.all-rekap-scroll td.all-rekap-description-cell { overflow: visible; text-overflow: clip; }
 .all-rekap-scroll thead th { position: sticky; z-index: 3; top: 0; background: #f8f9f6; }
 .all-rekap-scroll th:first-child { left: 0; z-index: 5; }
 .all-rekap-scroll td:first-child { position: sticky; z-index: 2; left: 0; background: #fff; }
