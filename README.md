@@ -21,7 +21,9 @@ Tanpa konfigurasi cloud, perubahan tersimpan di browser yang sedang digunakan. U
 6. Salin URL berakhiran `/exec`.
 7. Jika `apps-script/Code.gs` diperbarui, buka Deploy > Manage deployments, pilih Edit, pilih New version, lalu deploy ulang. URL `/exec` pada deployment yang sama biasanya tetap digunakan.
 
-Apps Script memeriksa sesi untuk semua operasi tulis dan pembacaan workflow. Endpoint dashboard publik mengembalikan ringkasan per program/tahun serta daftar terbatas kolom `NO.PRK`, `URAIAN`, program, tahun, keterangan, dan angka rekap. Nomor kontrak, nama vendor, dan rincian workflow tidak dipublikasikan. Pastikan kebijakan organisasi mengizinkan publik melihat No. PRK dan uraian sebelum mengaktifkan akses anonim.
+Apps Script memeriksa sesi untuk semua operasi tulis dan pembacaan workflow. Endpoint dashboard publik mengembalikan ringkasan per program/tahun serta daftar terbatas kolom `NO.PRK`, `NO.RAB`, `URAIAN`, program, tahun, keterangan, angka rekap, dan proyeksi tagih. No. RAB disertakan agar baris RAB tanpa No. PRK tetap dapat dikenali. Nomor kontrak, nama vendor, tanggal jadwal, dan rincian workflow tidak dipublikasikan. Pastikan kebijakan organisasi mengizinkan publik melihat No. PRK, No. RAB, dan uraian sebelum mengaktifkan akses anonim.
+
+Jika kolom `TOTAL PA` kosong tetapi transfer Finalisasi ke PA tersimpan, dashboard memakai saldo kumulatif dari riwayat transfer untuk mengisi tampilan. Pencocokan dilakukan dengan ID data, lalu nomor RAB atau PRK sebagai cadangan. Baris finalisasi tetap ditampilkan meskipun `TOTAL AKHIR` kosong; baris rincian RAB tanpa transfer yang cocok tetap dikecualikan. Data publik hanya menyertakan penanda boolean `paFinalized`, bukan rincian transfer. Deploy ulang versi Apps Script setelah perubahan pada `apps-script/Code.gs` agar pemulihan saldo ini aktif pada endpoint publik.
 
 Pada kunjungan pertama, dashboard publik menampilkan tombol **Setup Admin**. Isi `ADMIN_SETUP_KEY`, nama, username, dan kata sandi admin minimal 12 karakter. Setelah admin dibuat, kunci setup dihapus dari Script Properties. Admin kemudian dapat membuat akun **Tim Perencanaan** dan **Viewer** pada menu Manajemen User. Viewer hanya dapat membaca; semua perubahan juga ditolak oleh server, bukan sekadar disembunyikan di antarmuka.
 
@@ -35,16 +37,18 @@ File `api/apps-script.js` meneruskan permintaan browser ke Apps Script dari sisi
 
 ## Impor workbook
 
-Pilih file `.xlsx`. Aplikasi mencari sheet `DATA ANGGARAN INVESTASI` atau `DATA PENGADAAN` dengan header `NO.PRK`, `URAIAN`, `TOTAL RAB`, dan `NILAI KONTRAK`; sheet lain dengan header yang sama juga dapat digunakan. Impor mengganti seluruh dataset aktif. Ekspor menghasilkan workbook rekap A-Z.
+Pilih file `.xlsx`. Aplikasi mencari sheet `DATA ANGGARAN INVESTASI` atau `DATA PENGADAAN` dengan header `NO.PRK`, `URAIAN`, `TOTAL RAB`, dan `NILAI KONTRAK`; sheet lain dengan header yang sama juga dapat digunakan. Impor mengganti seluruh dataset aktif. Ekspor menghasilkan workbook rekap A-AG.
 
-Kolom yang dipetakan meliputi No. PRK, No. PRK SKKI/Fix, No. WBS, Pos Anggaran, No. RAB, No. PA, Uraian, Total PRK, Relokasi, Revisi SKKI, Total Akhir, Total RAB/PA, No. Kontrak, Vendor, Nilai Kontrak, Pengembalian PA, Penggantian Biaya, Tagihan, Total Bayar, Sisa PRK, Program, Tahun Anggaran, dan Keterangan.
+Kolom yang dipetakan meliputi No. PRK, No. PRK SKKI/Fix, No. WBS, Pos Anggaran, No. RAB, No. PA, Uraian, Total PRK, Relokasi, Revisi SKKI, Total Akhir, Total RAB/PA, No. Kontrak, Vendor, Nilai Kontrak, Pengembalian PA, Penggantian Biaya, Tagihan, Total Bayar, Sisa PRK, Program, Tahun Anggaran, Keterangan, serta kolom AA-AG: Tanggal Awal, Tanggal Akhir, Rencana Kontrak, Rencana Tagih, Progress, Proyeksi Tagih, dan Tanggal Bayar.
+
+Dashboard setelah login menampilkan AI Total dan ringkasan total RAB, PA, kontrak, tagihan, pembayaran, serta sisa PRK. Rincian Murni dan Lanjutan/Luncuran ditampilkan di bawah ringkasan utama dengan persentase dua desimal. Dashboard publik memakai tata letak ringkasan dan kartu program pada gambar revisi. Kedua dashboard hanya menghitung baris PRK yang memiliki nilai `TOTAL AKHIR` (kolom L), sehingga baris detail yang mengulang angka tidak terhitung ganda; tagihan dan pembayaran dibandingkan dengan nilai kontrak.
 
 ## Alur Input RAB dan Realisasi
 
-1. **Input Material**: buat master material dengan kriteria TM/TR, satuan, harga material, satu tarif jasa per satuan, dan jenis MDU/NON MDU.
-2. **Master Kegiatan**: kelola paket pekerjaan, nama kegiatan, satuan, kriteria, dan PRK acuan; data impor `DATABASE KEGIATAN` juga tersedia di sini.
-3. **RAB Komponen**: kelompokkan komponen berdasarkan kriteria dan nama kegiatan; pilih material dari master atau masukkan harga manual serta kebutuhan per satuan kegiatan.
-4. **RAB Kegiatan**: pilih PRK dari hasil impor, kriteria, kegiatan, satuan, dan volume. Nilai RAB dihitung dari jumlah (kebutuhan komponen x harga material + tarif jasa) x volume kegiatan.
+1. **Input Material**: buat master material dengan kriteria TM/TR, satuan, harga material, satu tarif jasa per satuan, dan jenis MDU/NON MDU. Impor workbook juga mengambil daftar harga dari `FORM MATERIAL & HARGA`.
+2. **Master Kegiatan**: kelola paket pekerjaan, nama komponen pekerjaan, satuan, kriteria, dan PRK acuan; data impor `DATABASE KEGIATAN` menjadi sumber pilihan PRK dan komponen pekerjaan.
+3. **RAB Komponen**: pilih PRK, pilih kegiatan, lalu pilih komponen pekerjaan dari `DATABASE KEGIATAN`. Filter keterangan, kriteria, dan MDU/NON MDU serta material, satuan, dan harga terkait muncul otomatis. Isi volume setiap material untuk menyimpan RAB Komponen per PRK.
+4. **RAB Kegiatan**: pilih PRK lalu kegiatan. Daftar komponen pekerjaan dan jumlah material/jasanya direkap dari RAB Komponen; tidak ada input volume pada tahap ini. Simpan rekap untuk mencatatnya ke Google Sheets; pajak dihitung dari subtotal rekap.
 4. **Finalisasi PA**: setelah RAB kegiatan disepakati, alihkan saldo RAB ke PA.
 5. **Realisasi**: catat tanggal, volume terlaksana, nilai tagihan, dan nilai dibayar. Sisa volume ditampilkan pada tabel RAB Kegiatan.
 

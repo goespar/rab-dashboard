@@ -435,16 +435,22 @@ function App() {
       if (!response.ok || !result.ok) throw new Error(result.error || 'Penyimpanan cloud gagal.')
       setConnection('cloud')
       setNotice(`${successMessage} Tersimpan di Google Sheets.`)
-    } catch {
+      return { ok: true, savedToSheets: true, message: `${successMessage} Tersimpan di Google Sheets.` }
+    } catch (error) {
       setConnection('local')
-      setNotice(`${successMessage} Tersimpan di browser ini.`)
+      const message = `${successMessage} Tersimpan lokal, tetapi gagal disinkronkan ke Google Sheets: ${error.message || 'Kesalahan koneksi.'}`
+      setNotice(message)
+      return { ok: false, savedToSheets: false, message }
     }
   }
 
-  async function saveWorkflowCollection(collection, nextRecords, successMessage) {
+  async function saveWorkflowCollection(collection, nextRecords, successMessage, onProgress) {
     const nextCollections = { ...workflowCollections, [collection]: nextRecords }
     setWorkflowCollections(nextCollections)
     window.localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(nextCollections))
+    onProgress?.('local')
+    let relatedRecordsSaved = true
+    let relatedRecordsError = ''
     if (collection === 'activities' || collection === 'components') {
       const activitiesForTotals = collection === 'activities' ? nextRecords : workflowCollections.activities
       const componentsForTotals = collection === 'components' ? nextRecords : workflowCollections.components
@@ -462,8 +468,20 @@ function App() {
       activitiesForTotals.forEach((activity) => {
         const sourceRecord = addAffectedRecord(activity)
         if (!sourceRecord) return
-        const matchingComponents = componentsForTotals.filter((component) => component.criteria === activity.criteria
-          && component.activity.trim().toLowerCase() === activity.name.trim().toLowerCase())
+        if (activity.materialId) {
+          const lineTotal = activity.total !== undefined
+            ? Number(activity.total || 0)
+            : (Number(activity.materialPrice || 0) + Number(activity.servicePrice || 0)) * Number(activity.volume || 0)
+          totalsByRecord.set(sourceRecord.id, (totalsByRecord.get(sourceRecord.id) || 0) + lineTotal)
+          return
+        }
+        const componentsForActivity = componentsForTotals.filter((component) =>
+          component.activity.trim().toLowerCase() === activity.name.trim().toLowerCase())
+        const prkComponents = componentsForActivity.filter((component) =>
+          String(component.prk || '').trim() === String(activity.prk || '').trim())
+        const matchingComponents = prkComponents.length
+          ? prkComponents
+          : componentsForActivity.filter((component) => !String(component.prk || '').trim())
         const unitCost = matchingComponents.reduce((sum, component) => sum
           + Number(component.quantityPerUnit || 0) * (Number(component.materialPrice || 0) + Number(component.servicePrice || 0)), 0)
         totalsByRecord.set(sourceRecord.id, (totalsByRecord.get(sourceRecord.id) || 0) + unitCost * Number(activity.volume || 0))
@@ -472,10 +490,14 @@ function App() {
         ? { ...record, rabTotal: totalsByRecord.get(record.id) || 0 }
         : record)
       if (updatedProgramRecords.some((record, index) => record !== records[index])) {
-        await saveRecords(updatedProgramRecords, 'Total RAB per PRK diperbarui.')
+        onProgress?.('sheets')
+        const relatedSave = await saveRecords(updatedProgramRecords, 'Total RAB per PRK diperbarui.')
+        relatedRecordsSaved = relatedSave?.ok !== false
+        relatedRecordsError = relatedSave?.message || ''
       }
     }
     try {
+      onProgress?.('sheets')
       const response = await apiPost({ action: 'saveWorkflow', collection, records: nextRecords })
       const result = await response.json()
       if (!response.ok || !result.ok) throw new Error(result.error || 'Penyimpanan Google Sheets gagal.')
@@ -488,12 +510,18 @@ function App() {
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedProgramRecords))
       }
       setConnection('cloud')
-      setNotice(collection === 'realizations'
+      const sheetMessage = collection === 'realizations'
         ? `${successMessage} Total tagihan dan pembayaran diperbarui di RABData.`
-        : `${successMessage} Tersimpan di Google Sheets.`)
-    } catch {
+        : `${successMessage} Tersimpan di Google Sheets.`
+      const message = relatedRecordsSaved ? sheetMessage : `${sheetMessage} Namun total RAB per PRK gagal disinkronkan: ${relatedRecordsError}`
+      setNotice(message)
+      return { ok: relatedRecordsSaved, savedToSheets: true, message }
+    } catch (error) {
       setConnection('local')
-      setNotice(`${successMessage} Tersimpan di browser ini.`)
+      const relatedError = relatedRecordsSaved ? '' : ` Total RAB per PRK juga gagal disinkronkan: ${relatedRecordsError}`
+      const message = `${successMessage} Tersimpan lokal, tetapi gagal disimpan ke Google Sheets: ${error.message || 'Kesalahan koneksi.'}${relatedError}`
+      setNotice(message)
+      return { ok: false, savedToSheets: false, message }
     }
   }
 

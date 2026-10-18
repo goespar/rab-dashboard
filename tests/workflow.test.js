@@ -392,10 +392,12 @@ test('loads and migrates workflow JSON into named columns without losing records
     }
   }
 
-  const component = { id: 'component-1', activity: 'Pembangunan jaringan', name: 'Kabel', quantityPerUnit: 2, unit: 'm', materialPrice: 1000 }
+  const component = { id: 'component-1', activity: 'Pembangunan jaringan', workPackage: 'Paket distribusi', prk: 'PRK-1', programRecordId: 'record-1', name: 'Kabel', operation: 'Pasang', source: 'MDU', quantityPerUnit: 2, unit: 'm', materialPrice: 1000 }
+  const activity = { id: 'activity-1', prk: 'PRK-1', name: 'Pembangunan jaringan', componentName: 'Pembangunan jaringan', workPackage: 'Paket distribusi', materialId: 'material-1', materialName: 'Kabel', source: 'MDU', quantityPerUnit: 1.5, volume: 3, materialPrice: 1000, servicePrice: 250, total: 5625 }
   const transfer = { id: 'transfer-1', recordId: 'prk-1', amount: 250, rabBefore: 1000, rabAfter: 750, paBefore: 0, paAfter: 250, contractValue: 250 }
   const sheets = {
     RAB_KOMPONEN: new MockSheet([['ID', 'DATA_JSON', 'UPDATED_AT'], ['component-1', JSON.stringify(component), '2026-09-27']]),
+    RAB_KEGIATAN: new MockSheet([['ID', 'DATA_JSON', 'UPDATED_AT'], ['activity-1', JSON.stringify(activity), '2026-09-27']]),
     PA_TRANSFERS: new MockSheet([['ID', 'DATA_JSON', 'UPDATED_AT'], ['transfer-1', JSON.stringify(transfer), '2026-09-27']]),
   }
   const spreadsheet = {
@@ -417,12 +419,25 @@ test('loads and migrates workflow JSON into named columns without losing records
 
   const result = JSON.parse(context.doGet({ parameter: { action: 'loadWorkflow' } }).text)
   const componentHeaders = sheets.RAB_KOMPONEN.values[0]
+  const activityHeaders = sheets.RAB_KEGIATAN.values[0]
   const transferHeaders = sheets.PA_TRANSFERS.values[0]
 
   assert.equal(result.collections.components[0].quantityPerUnit, 2)
+  assert.equal(result.collections.components[0].prk, 'PRK-1')
+  assert.equal(result.collections.components[0].workPackage, 'Paket distribusi')
+  assert.equal(result.collections.activities[0].source, 'MDU')
+  assert.equal(result.collections.activities[0].quantityPerUnit, 1.5)
   assert.equal(result.collections.paTransfers[0].amount, 250)
   assert.equal(componentHeaders.includes('DATA_JSON'), false)
+  assert.equal(sheets.RAB_KOMPONEN.values[1][componentHeaders.indexOf('No. PRK')], 'PRK-1')
+  assert.equal(sheets.RAB_KOMPONEN.values[1][componentHeaders.indexOf('Paket Kegiatan')], 'Paket distribusi')
   assert.equal(sheets.RAB_KOMPONEN.values[1][componentHeaders.indexOf('Volume per Satuan')], 2)
+  assert.equal(sheets.RAB_KOMPONEN.values[1][componentHeaders.indexOf('Keterangan')], 'Pasang')
+  assert.equal(sheets.RAB_KOMPONEN.values[1][componentHeaders.indexOf('Jenis Material')], 'MDU')
+  assert.equal(activityHeaders.includes('DATA_JSON'), false)
+  assert.equal(result.collections.activities[0].workPackage, 'Paket distribusi')
+  assert.equal(sheets.RAB_KEGIATAN.values[1][activityHeaders.indexOf('Jenis Material')], 'MDU')
+  assert.equal(sheets.RAB_KEGIATAN.values[1][activityHeaders.indexOf('Kuantitas per Satuan')], 1.5)
   assert.equal(transferHeaders.includes('DATA_JSON'), false)
   assert.equal(sheets.PA_TRANSFERS.values[1][transferHeaders.indexOf('Nilai Dialihkan (Rp)')], 250)
 })
@@ -464,8 +479,8 @@ test('imports material prices by header and normalizes Excel thousand-scaled cur
   dataSheet.addRow(['NO.PRK', 'URAIAN', 'TOTAL RAB', 'NILAI KONTRAK'])
   dataSheet.addRow(['PRK-1', 'Paket A', 1000, 0])
   const materialSheet = workbook.addWorksheet('FORM MATERIAL & HARGA')
-  materialSheet.addRow(['HARGA JASA', 'KRITERIA', 'URAIAN', 'MDU/NON MDU', 'SAT', 'HARGA MATERIAL', 'KOMPONEN PEKERJAAN'])
-  materialSheet.addRow([254.649, 'TM', 'Material A', 'NON MDU', 'set', '1,344,478', 'Pemasangan SUTM'])
+  materialSheet.addRow(['HARGA JASA', 'KRITERIA', 'URAIAN', 'MDU/NON MDU', 'SAT', 'HARGA MATERIAL', 'KOMPONEN PEKERJAAN', 'KETERANGAN'])
+  materialSheet.addRow([254.649, 'TM', 'Material A', 'NON MDU', 'set', '1,344,478', 'Pemasangan SUTM', 'Pasang'])
   const buffer = await workbook.xlsx.writeBuffer()
   const result = await importWorkbook({
     arrayBuffer: async () => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
@@ -477,12 +492,14 @@ test('imports material prices by header and normalizes Excel thousand-scaled cur
     materialPrice: result.materials[0].materialPrice,
     servicePrice: result.materials[0].servicePrice,
     componentActivity: result.materials[0].componentActivity,
+    operation: result.materials[0].operation,
   }, {
     name: 'Material A',
     unit: 'set',
     materialPrice: 1344478,
     servicePrice: 254649,
     componentActivity: 'Pemasangan SUTM',
+    operation: 'Pasang',
   })
   assert.equal(parseNumber('1.344.478'), 1344478)
   assert.equal(parseNumber('1,25'), 1.25)

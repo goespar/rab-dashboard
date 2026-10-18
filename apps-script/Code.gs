@@ -37,13 +37,17 @@ const WORKFLOW_COLUMNS = {
     ['No. PRK Acuan', 'prk'], ['Kriteria', 'criteria'], ['Catatan', 'notes'], ['Diimpor Dari', 'importedFrom'], ['Sheet Sumber', 'sourceSheet'], ['Baris Sumber', 'sourceRow'],
   ],
   components: [
-    ['ID', 'id'], ['Kriteria', 'criteria'], ['Kegiatan', 'activity'], ['Uraian Komponen', 'name'], ['ID Material', 'materialId'],
-    ['Nama Material', 'materialName'], ['Volume per Satuan', 'quantityPerUnit'], ['Satuan', 'unit'], ['Harga Material (Rp)', 'materialPrice'],
+    ['ID', 'id'], ['ID Data PRK', 'programRecordId'], ['No. PRK', 'prk'], ['Kriteria', 'criteria'],
+    ['Kegiatan', 'activity'], ['Paket Kegiatan', 'workPackage'], ['Uraian Komponen', 'name'], ['ID Material', 'materialId'],
+    ['Nama Material', 'materialName'], ['Keterangan', 'operation'], ['Jenis Material', 'source'], ['Volume per Satuan', 'quantityPerUnit'], ['Satuan', 'unit'], ['Harga Material (Rp)', 'materialPrice'],
     ['Harga Jasa (Rp)', 'servicePrice'], ['Bagian Material (Rp)', 'materialPart'], ['Bagian Jasa (Rp)', 'servicePart'], ['Jumlah (Rp)', 'totalPart'], ['Catatan', 'notes'],
   ],
   activities: [
     ['ID', 'id'], ['No. RAB', 'rabNumber'], ['ID Data PRK', 'programRecordId'], ['No. PRK', 'prk'], ['Pos Anggaran', 'position'],
-    ['Kriteria', 'criteria'], ['Nama Kegiatan', 'name'], ['Satuan', 'unit'], ['Volume', 'volume'], ['Tahun Anggaran', 'year'],
+    ['Kriteria', 'criteria'], ['Nama Kegiatan', 'name'], ['Paket Kegiatan', 'workPackage'], ['Satuan', 'unit'], ['Volume', 'volume'], ['Tahun Anggaran', 'year'],
+    ['Nama Komponen Pekerjaan', 'componentName'], ['ID Material', 'materialId'], ['ID Komponen', 'componentId'], ['Nama Material', 'materialName'],
+    ['Jenis Material', 'source'], ['Kuantitas per Satuan', 'quantityPerUnit'],
+    ['Harga Material Satuan (Rp)', 'materialPrice'], ['Harga Jasa Satuan (Rp)', 'servicePrice'],
     ['Nilai Material (Rp)', 'materialTotal'], ['Nilai Jasa (Rp)', 'serviceTotal'], ['Total RAB (Rp)', 'total'], ['Catatan', 'notes'],
   ],
   materialRecap: [
