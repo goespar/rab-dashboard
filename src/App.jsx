@@ -2,12 +2,17 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity, ArrowDownToLine, ArrowUpFromLine, BarChart3, Boxes, Check, ChevronDown,
   CircleAlert, ClipboardList, Cloud, FileSpreadsheet, FolderKanban, LayoutDashboard, LoaderCircle,
-  FileText, LogIn, LogOut, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Search, Settings2, ShieldCheck, Upload, Users, Wrench, X, Zap,
+  ArrowUpRight, FileText, LockKeyhole, LogIn, LogOut, MapPin, PanelLeftClose, PanelLeftOpen, Pencil, PhoneCall, Plus, Search, Settings2, ShieldCheck, Upload, Users, Wrench, X, Zap,
 } from 'lucide-react'
 import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { exportWorkbook, formatCurrency, importWorkbook, parseRupiahPrice, sampleRecords } from './lib/workbook.js'
 import { applyFinalizedPaBalances, summarizePublicDashboard } from './lib/publicDashboard.js'
 import RabWorkflow from './RabWorkflow.jsx'
+import danantaraLogo from '../logo/Danantara_Indonesia_(no_SW).svg.webp'
+import plnLogo from '../logo/Logo_PLN.png'
+import contactCenterLogo from '../logo/call center PLN 123.png'
+import loginBackground from '../logo/halamanlogin.png'
+import plnOfficer from '../logo/petugaspln.png'
 import './App.css'
 import './pln-theme.css'
 
@@ -363,7 +368,9 @@ function App() {
     setAuthBusy(true)
     setAuthMessage('')
     const form = new FormData(event.currentTarget)
-    const setup = authDialog === 'setup'
+    const setup = event.currentTarget.dataset.authMode
+      ? event.currentTarget.dataset.authMode === 'setup'
+      : authDialog === 'setup'
     const payload = setup
       ? { action: 'bootstrapAdmin', setupKey: form.get('setupKey'), username: form.get('username'), name: form.get('name'), password: form.get('password') }
       : { action: 'login', username: form.get('username'), password: form.get('password') }
@@ -700,15 +707,21 @@ function App() {
               <button className="button button-secondary export-button" onClick={downloadWorkbook}><ArrowDownToLine size={16} /><span>Ekspor</span></button>
               {canEdit && <button className="button button-primary" onClick={() => { setImportModal(true); setImportError(''); setPendingImport(null) }}><Plus size={17} /><span>Impor Excel</span></button>}
               <button className="icon-button" aria-label="Keluar" title="Keluar" onClick={logout}><LogOut size={17} /></button>
-            </> : <button className="button button-primary" onClick={() => { setAuthMessage(''); setAuthDialog(authStatus?.setupRequired ? 'setup' : 'login') }}><LogIn size={16} /><span>{authStatus?.setupRequired ? 'Setup Admin' : 'Login'}</span></button>}
+            </> : <button className="button button-primary" onClick={() => {
+              if (authStatus?.setupRequired) {
+                setAuthMessage('')
+                setAuthDialog('setup')
+              } else {
+                document.querySelector('.pln-login-panel')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                document.querySelector('#public-login-username')?.focus({ preventScroll: true })
+              }
+            }}><LogIn size={16} /><span>{authStatus?.setupRequired ? 'Setup Admin' : 'Login'}</span></button>}
           </div>
         </header>
 
         <div className="page-content">
-          {activeView === 'overview' && !auth ? <PublicDashboard groups={dashboardRecords} rows={publicRows} selectedYear={selectedYear} setSelectedYear={setSelectedYear} updatedAt={publicUpdatedAt} connection={connection} loading={publicLoading} error={publicError} /> : activeView === 'overview' ? <>
-            <section className="page-heading dashboard-heading"><div><p className="eyebrow">DASHBOARD RAB</p><p className="heading-subtitle">Rekap anggaran investasi dan realisasi per program.</p></div>
-              <div className="filter-pair"><label className="select-wrap"><span className="sr-only">Filter tahun</span><select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}><option value="all">Semua tahun</option>{years.map((year) => <option key={year} value={year}>{year}</option>)}</select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter program</span><select value={selectedProgram} onChange={(event) => setSelectedProgram(event.target.value)}><option value="all">Semua program</option>{programs.map((program) => <option key={program} value={program}>{program}</option>)}</select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter keterangan</span><select value={selectedNotesCategory} onChange={(event) => setSelectedNotesCategory(event.target.value)}><option value="all">Semua keterangan</option><option value="Murni">Murni</option><option value="Lanjutan">Lanjutan</option></select><ChevronDown size={15} /></label></div>
-            </section>
+          {activeView === 'overview' && !auth ? <PublicDashboard rows={publicRows} selectedYear={selectedYear} showLogin authStatus={authStatus} authMessage={authMessage} authBusy={authBusy} onSubmitAuth={submitAuth} onOpenSetup={() => { setAuthMessage(''); setAuthDialog('setup') }} /> : activeView === 'overview' ? <>
+            <PublicDashboard rows={recordsWithFinalizedPa} selectedYear={selectedYear} setSelectedYear={setSelectedYear} selectedProgram={selectedProgram} setSelectedProgram={setSelectedProgram} selectedNotesCategory={selectedNotesCategory} setSelectedNotesCategory={setSelectedNotesCategory} showCharts connection={connection} loading={authDataLoading || publicLoading} error={publicError} updatedAt={publicUpdatedAt} />
 
             <AuthenticatedInvestmentSummary summary={investmentSummary} />
 
@@ -742,7 +755,7 @@ function App() {
 
       {authDialog && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAuthDialog('') }}><section className="modal auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title">
         <div className="modal-heading"><div><p className="eyebrow">{authDialog === 'setup' ? 'AKUN PERTAMA' : 'AKSES PENGGUNA'}</p><h2 id="auth-title">{authDialog === 'setup' ? 'Setup admin' : 'Login'}</h2><p>{authDialog === 'setup' ? 'Buat akun admin pertama untuk mengelola pengguna.' : 'Masuk untuk membuka data dan alur kerja.'}</p></div><button className="icon-button" aria-label="Tutup" onClick={() => setAuthDialog('')}><X size={19} /></button></div>
-        <form onSubmit={submitAuth}>
+        <form onSubmit={submitAuth} data-auth-mode={authDialog}>
           {authDialog === 'setup' && !authStatus?.setupAvailable ? <div className="inline-error"><CircleAlert size={16} />ADMIN_SETUP_KEY belum diatur pada Script Properties Apps Script.</div> : <>
             {authDialog === 'setup' && <label className="field-label">Kunci setup<input name="setupKey" type="password" required autoComplete="off" /></label>}
             {authDialog === 'setup' && <label className="field-label">Nama admin<input name="name" required autoComplete="name" /></label>}
@@ -916,15 +929,13 @@ function PublicProgramCard({ card, selectedYear }) {
   </article>
 }
 
-function PublicDashboard({ rows, selectedYear, setSelectedYear, updatedAt, connection, loading, error }) {
-  const [programFilter, setProgramFilter] = useState('all')
-  const [notesFilter, setNotesFilter] = useState('all')
-  const publicYears = YEAR_OPTIONS
+function PublicDashboard({ rows, selectedYear, setSelectedYear, selectedProgram = 'all', setSelectedProgram, selectedNotesCategory = 'all', setSelectedNotesCategory, showLogin = false, showCharts = false, updatedAt, connection, loading, error, authStatus, authMessage, authBusy, onSubmitAuth, onOpenSetup }) {
+  const dashboardPrograms = [...new Set(rows.map((row) => row.program).filter(Boolean))].sort()
   const programCode = (value) => String(value || '').match(/\b(DAL|EFI|SAR)\b/i)?.[1].toUpperCase() || ''
   const filteredRows = rows.filter((row) =>
     (selectedYear === 'all' || String(row.year) === selectedYear)
-      && (programFilter === 'all' || programCode(row.program) === programFilter)
-      && (notesFilter === 'all' || getNotesCategory(row) === notesFilter)
+      && (selectedProgram === 'all' || row.program === selectedProgram)
+      && (selectedNotesCategory === 'all' || getNotesCategory(row) === selectedNotesCategory)
   )
   const chartRows = filteredRows
   const programCards = [
@@ -964,7 +975,77 @@ function PublicDashboard({ rows, selectedYear, setSelectedYear, updatedAt, conne
   const updatedLabel = updatedAt ? new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(updatedAt)) : '--:--'
 
   return <div className="public-dashboard">
-    <section className="public-dashboard-heading"><div><p className="eyebrow">RINGKASAN ANGGARAN INVESTASI</p><h1>DASHBOARD AI {titleYear}</h1><p>Ringkasan AI, RAB, PA, kontrak, tagihan, dan pembayaran.</p></div><div className="public-dashboard-filters"><label className="select-wrap"><span className="sr-only">Filter program</span><select value={programFilter} onChange={(event) => setProgramFilter(event.target.value)}><option value="all">Semua program</option><option value="DAL">DAL</option><option value="EFI">EFI</option><option value="SAR">SAR</option></select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter tahun</span><select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}><option value="all">Semua tahun</option>{publicYears.map((year) => <option key={year} value={year}>{year}</option>)}</select><ChevronDown size={15} /></label><label className="select-wrap"><span className="sr-only">Filter keterangan</span><select value={notesFilter} onChange={(event) => setNotesFilter(event.target.value)}><option value="all">Semua keterangan</option><option value="Murni">Murni</option><option value="Lanjutan">Lanjutan</option></select><ChevronDown size={15} /></label></div></section>
+    {showLogin && <>
+    <section className="pln-welcome" style={{ backgroundImage: `linear-gradient(105deg, rgba(5, 35, 76, .91) 0%, rgba(5, 66, 119, .8) 56%, rgba(4, 62, 112, .62) 100%), url("${loginBackground}")` }} aria-label="Login PLN UP3 Bali Utara">
+      <svg className="pln-network-lines" viewBox="0 0 900 420" aria-hidden="true">
+        <path d="M15 312 128 241l105 30 97-116 116 63 102-112 110 44 105-105" />
+        <path d="m83 380 150-109 97 36 116-89 102 8 110-76 115 15" />
+        <path d="m230 271 30-146 70 30m116 33 30-118 72 20m110 24 21-104" />
+        <g><circle cx="128" cy="241" r="5" /><circle cx="233" cy="271" r="5" /><circle cx="330" cy="155" r="5" /><circle cx="446" cy="218" r="5" /><circle cx="548" cy="106" r="5" /><circle cx="658" cy="150" r="5" /><circle cx="763" cy="45" r="5" /><circle cx="330" cy="307" r="5" /><circle cx="446" cy="218" r="5" /><circle cx="548" cy="226" r="5" /><circle cx="658" cy="150" r="5" /></g>
+      </svg>
+      <div className="pln-welcome-copy">
+        <div className="pln-brand-logos" aria-label="PLN dan Danantara Indonesia">
+          <span className="pln-logo-tile"><img src={plnLogo} alt="Logo PLN" /></span>
+          <span className="danantara-logo-tile"><img src={danantaraLogo} alt="Danantara Indonesia" /></span>
+        </div>
+        <p className="pln-welcome-eyebrow"><Zap size={13} fill="currentColor" /> PLN UP3 BALI UTARA</p>
+        <h2>Energi yang menghubungkan,<br />pelayanan yang menguatkan.</h2>
+        <p className="pln-welcome-motto">Menerangi Bali Utara, melayani dengan sepenuh hati.</p>
+        <div className="pln-welcome-signature">
+          <img src={plnOfficer} alt="Petugas PLN siap melayani" />
+          <div><strong>Siap melayani dengan sepenuh hati</strong><span>Monitoring RAB &amp; Realisasi</span></div>
+        </div>
+      </div>
+      <div className="pln-login-panel">
+        <span className="pln-login-icon"><LockKeyhole size={17} /></span>
+        <p className="pln-login-eyebrow">PORTAL INTERNAL</p>
+        <h3>Selamat datang</h3>
+        <p className="pln-login-description">Masuk untuk mengakses data dan alur kerja.</p>
+        <form className="pln-login-form" onSubmit={onSubmitAuth} data-auth-mode="login">
+          <label className="field-label">Username<input id="public-login-username" name="username" required autoComplete="username" placeholder="Masukkan username" /></label>
+          <label className="field-label">Kata sandi<input name="password" type="password" required minLength="12" autoComplete="current-password" placeholder="Masukkan kata sandi" /></label>
+          {authMessage && <div className="inline-error" role="alert"><CircleAlert size={16} />{authMessage}</div>}
+          <button type="submit" className="pln-login-submit" disabled={authBusy}><LogIn size={16} />{authBusy ? 'Memproses...' : 'Login ke dashboard'}<ArrowUpRight size={16} /></button>
+        </form>
+        {authStatus?.setupRequired && <button type="button" className="pln-setup-link" onClick={onOpenSetup}>Belum ada akun? Setup admin</button>}
+        <div className="pln-login-footnote"><ShieldCheck size={13} /> Akses aman untuk petugas berwenang</div>
+      </div>
+      <a className="pln-call-center" href="tel:123" aria-label="Hubungi Call Center PLN 123">
+        <img src={contactCenterLogo} alt="" />
+        <span><small>CALL CENTER PLN</small><strong>123</strong></span>
+        <PhoneCall size={17} />
+      </a>
+    </section>
+
+    <section className="pln-location-card" aria-label="Lokasi PLN UP3 Bali Utara">
+      <div className="pln-location-copy">
+        <span className="pln-location-icon"><MapPin size={18} /></span>
+        <div><p className="eyebrow">KUNJUNGI KAMI</p><h2>PLN UP3 Bali Utara</h2>
+          <address>Jl. Udayana No. 27, Banyuasri, Kec. Buleleng,<br />Kabupaten Buleleng, Bali 81114</address>
+          <a className="pln-contact-link" href="tel:+6236221071"><PhoneCall size={13} />(0362) 21071</a>
+          <a className="pln-directions-link" href="https://www.google.com/maps/dir/?api=1&destination=-8.117583518860247%2C115.08546023442764" target="_blank" rel="noreferrer"><MapPin size={14} /> Lihat petunjuk arah <ArrowUpRight size={14} /></a>
+        </div>
+      </div>
+      <iframe className="pln-location-map" title="Peta lokasi PLN UP3 Bali Utara" loading="lazy" src="https://www.google.com/maps?q=-8.117583518860247,115.08546023442764&z=17&output=embed" referrerPolicy="no-referrer-when-downgrade" />
+    </section>
+    </>}
+
+    {showCharts && <>
+    <section className="public-dashboard-heading">
+      <div className="public-dashboard-title">
+        <p className="eyebrow">RINGKASAN ANGGARAN INVESTASI <span className="investment-sync-label">· SINKRON DARI RABDATA</span></p>
+        <h1>DASHBOARD AI {titleYear}</h1>
+        <p>Ringkasan AI, RAB, PA, kontrak, tagihan, dan pembayaran.</p>
+      </div>
+      <div className="public-dashboard-controls">
+        {setSelectedProgram && setSelectedNotesCategory && setSelectedYear && <div className="filter-pair">
+          <label className="select-wrap"><span className="sr-only">Filter tahun</span><select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}><option value="all">Semua tahun</option>{YEAR_OPTIONS.map((year) => <option key={year} value={year}>{year}</option>)}</select><ChevronDown size={15} /></label>
+          <label className="select-wrap"><span className="sr-only">Filter program</span><select value={selectedProgram} onChange={(event) => setSelectedProgram(event.target.value)}><option value="all">Semua program</option>{dashboardPrograms.map((program) => <option key={program} value={program}>{program}</option>)}</select><ChevronDown size={15} /></label>
+          <label className="select-wrap"><span className="sr-only">Filter keterangan</span><select value={selectedNotesCategory} onChange={(event) => setSelectedNotesCategory(event.target.value)}><option value="all">Semua keterangan</option><option value="Murni">Murni</option><option value="Lanjutan">Lanjutan</option></select><ChevronDown size={15} /></label>
+        </div>}
+        <span className={`public-live-status ${connection === 'cloud' ? 'is-live' : ''}`}><i />{loading ? rows.length ? 'Data tersimpan · memuat pembaruan...' : 'Memuat data dashboard...' : error ? rows.length ? 'Koneksi lambat · menampilkan data tersimpan' : 'Data dashboard belum tersinkron' : connection === 'cloud' ? `Diperbarui ${updatedLabel} · sinkron dari RABData` : 'Sinkron dari data RABData'}</span>
+      </div>
+    </section>
 
     <div className="public-board-scroll">
     <section className={`public-board-layout ${boardLayout}`} aria-label="Ringkasan per program">
@@ -988,15 +1069,8 @@ function PublicDashboard({ rows, selectedYear, setSelectedYear, updatedAt, conne
 
     </section>
     </div>
+    </>}
 
-    <section className="public-dashboard-table panel">
-      <div className="public-table-heading"><div><p className="eyebrow">SINKRON DARI RABDATA</p><h2>Data dashboard per PRK</h2></div><span className={`public-live-status ${connection === 'cloud' ? 'is-live' : ''}`}><i />{loading ? rows.length ? 'Data tersimpan · memuat pembaruan...' : 'Memuat data Google Sheets...' : error ? rows.length ? 'Koneksi lambat · menampilkan data tersimpan' : 'Koneksi Google Sheets bermasalah' : connection === 'cloud' ? `Diperbarui ${updatedLabel} · refresh 30 detik` : 'Menunggu koneksi Google Sheets'}</span></div>
-      <div className="table-scroll public-summary-scroll"><table><thead><tr><th>NO</th><th>NO. PRK / RAB</th><th>URAIAN</th><th>PROGRAM</th><th>TAHUN</th><th>KETERANGAN</th><th>TOTAL AKHIR</th><th>RAB</th><th>TOTAL PA</th><th>KONTRAK</th><th>SISA PRK</th><th>TAGIHAN</th><th>TOTAL BAYAR</th><th>BELUM TERBAYAR</th><th>PROYEKSI TAGIH</th></tr></thead><tbody>
-        {filteredRows.map((row, index) => <tr key={row.id}><td>{index + 1}</td><td>{row.prk || row.rabNumber || '-'}</td><td className="public-description-cell" title={row.description}>{row.description || '-'}</td><td>{row.program || '-'}</td><td>{row.year || '-'}</td><td>{getNotesCategory(row) || '-'}</td><td className="money-cell">{formatCurrency(row.totalFinal)}</td><td className="money-cell">{formatCurrency(row.rabTotal)}</td><td className="money-cell">{formatCurrency(row.paTotal)}</td><td className="money-cell">{formatCurrency(row.contractValue)}</td><td className="money-cell">{String(row.prk || '').trim() ? formatCurrency(row.prkRemaining) : '-'}</td><td className="money-cell">{formatCurrency(row.billed)}</td><td className="money-cell">{formatCurrency(row.paid)}</td><td className="money-cell">{formatCurrency(Math.max(0, Number(row.contractValue || 0) - Number(row.paid || 0)))}</td><td className="money-cell">{formatCurrency(row.projectedBilling)}</td></tr>)}
-        {!filteredRows.length && <tr><td colSpan="15">{loading ? 'Sedang mengambil data dashboard...' : error ? error : 'Belum ada data untuk filter ini.'}</td></tr>}
-      </tbody></table></div>
-      <div className="public-table-footer"><span>Menampilkan {filteredRows.length} dari {rows.length} baris PRK</span><span>Nomor kontrak dan vendor hanya tersedia setelah login.</span></div>
-    </section>
   </div>
 }
 

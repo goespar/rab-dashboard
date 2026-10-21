@@ -87,8 +87,8 @@ test('imports schedule columns AA-AG and keeps blank AI totals empty', async () 
 
 test('summarizes public dashboard totals and percentages per investment category', () => {
   const summary = summarizePublicDashboard([
-    { totalFinal: 1000, rabTotal: 100, paTotal: 300, contractValue: 200, billed: 100, paid: 50, prkRemaining: 600, notes: 'MURNI' },
-    { totalFinal: 3000, rabTotal: 200, paTotal: 500, contractValue: 1000, billed: 400, paid: 200, prkRemaining: 2300, notes: 'LANJUTAN' },
+    { prk: 'PRK-1', totalFinal: 1000, rabTotal: 100, paTotal: 300, contractValue: 200, billed: 100, paid: 50, prkRemaining: 600, notes: 'MURNI' },
+    { prk: 'PRK-2', totalFinal: 3000, rabTotal: 200, paTotal: 500, contractValue: 1000, billed: 400, paid: 200, prkRemaining: 2300, notes: 'LANJUTAN' },
     { totalFinal: '', totalPrk: 50000, rabTotal: 50000, notes: 'MURNI' },
   ])
 
@@ -101,6 +101,22 @@ test('summarizes public dashboard totals and percentages per investment category
   assert.equal(summary.percentages.categories.lanjutan.pa, 500 / 3000 * 100)
   assert.equal(summary.percentages.totals.billed, 500 / 1200 * 100)
   assert.equal(summary.percentages.categories.murni.paid, 50 / 200 * 100)
+})
+
+test('calculates remaining PRK only for rows with a PRK number', () => {
+  const records = [
+    { id: 'prk-row', prk: 'PRK-1', totalFinal: 1500, rabTotal: 500, paTotal: 200, prkRemaining: 800 },
+    { id: 'rab-detail', rabNumber: 'RAB-1', totalFinal: 500, rabTotal: 250, paTotal: 100, prkRemaining: 150 },
+  ]
+  const updated = applyFinalizedPaBalances(records, [
+    { recordId: 'prk-row', paAfter: 300 },
+    { recordId: 'rab-detail', paAfter: 150 },
+  ])
+  const summary = summarizePublicDashboard(updated)
+
+  assert.equal(updated[0].prkRemaining, 700)
+  assert.equal(updated[1].prkRemaining, '')
+  assert.equal(summary.totals.remainingPrk, 700)
 })
 
 test('includes finalized PA when total final is blank', () => {
@@ -222,12 +238,17 @@ test('transfers PA against the matching row ID and rejects overspending', async 
   assert.equal(publicSummary.rows[0].rabNumber, 'RAB-42')
   assert.equal(publicSummary.rows[0].paTotal, 500)
   assert.equal(publicSummary.rows[0].paFinalized, true)
+  assert.equal(publicSummary.rows[0].prkRemaining, '')
   assert.equal(publicSummary.groups[0].pa, 500)
+  assert.equal(publicSummary.groups[0].remainingPrk, 0)
+  context.syncPrkRemainingColumn_(dataSheet)
+  assert.equal(dataSheet.values[1][headers.indexOf('SISA PRK')], '')
   dataSheet.values[1][paColumn] = 500
   dataSheet.values[1][paguColumn] = 1500
   dataSheet.values[1][rabColumn] = 700
   dataSheet.values[1][recordIdColumn] = 'row-2'
   dataSheet.values[1][prkColumn] = 'PRK-1'
+  dataSheet.values[1][headers.indexOf('SISA PRK')] = 300
   const transferHeaders = sheets.PA_TRANSFERS.values[0]
   assert.equal(sheets.PA_TRANSFERS.values.length, 2)
   assert.equal(transferHeaders.includes('DATA_JSON'), false)
