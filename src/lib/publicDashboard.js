@@ -44,11 +44,16 @@ export function applyFinalizedPaBalances(records, transfers) {
       ?? finalizedPaByRab.get(normalizeReference(record.rabNumber))
       ?? finalizedPaByPrk.get(normalizeReference(record.prk))
     const currentPa = Number(record.paTotal) || 0
-    if (finalizedPa === undefined) return record
+    const paTotal = finalizedPa === undefined ? currentPa : Math.max(currentPa, finalizedPa)
+    const prkRemaining = String(record.prk || '').trim()
+      ? (Number(record.totalFinal) || 0) - (Number(record.rabTotal) || 0) - paTotal
+      : ''
+    if (finalizedPa === undefined && record.prkRemaining === prkRemaining) return record
     return {
       ...record,
-      ...(finalizedPa > currentPa ? { paTotal: finalizedPa } : {}),
-      paFinalized: true,
+      ...(finalizedPa === undefined ? {} : { paTotal }),
+      prkRemaining,
+      ...(finalizedPa === undefined ? {} : { paFinalized: true }),
     }
   })
 }
@@ -66,7 +71,7 @@ export function summarizePublicDashboard(rows) {
       contract: number(row.contractValue),
       billed: number(row.billed),
       paid: number(row.paid),
-      remainingPrk: number(row.prkRemaining),
+      remainingPrk: String(row.prk || '').trim() ? number(row.prkRemaining) : 0,
       projectedBilling: number(row.projectedBilling),
     }
     totals.count += 1

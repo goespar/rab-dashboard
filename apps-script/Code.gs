@@ -211,6 +211,7 @@ function toClientRecord_(row) {
 }
 
 function calculatePrkRemaining_(record) {
+  if (!String(record.prk || '').trim()) return ''
   return (Number(record.totalFinal) || 0) - (Number(record.rabTotal) || 0) - (Number(record.paTotal) || 0)
 }
 
@@ -226,10 +227,12 @@ function syncPrkRemainingColumn_(sheet) {
   const rabIndex = headers.indexOf('TOTAL RAB')
   const paIndex = headers.indexOf('TOTAL PA')
   const remainingIndex = headers.indexOf('SISA PRK')
-  if (totalFinalIndex < 0 || rabIndex < 0 || paIndex < 0 || remainingIndex < 0) return
+  const prkIndex = headers.indexOf('NO.PRK')
+  if (totalFinalIndex < 0 || rabIndex < 0 || paIndex < 0 || remainingIndex < 0 || prkIndex < 0) return
 
   const remainingValues = values.slice(1).map((row) => {
     if (!row.some((cell) => cell !== '' && cell !== null)) return ['']
+    if (!String(row[prkIndex] || '').trim()) return ['']
     return [(Number(row[totalFinalIndex]) || 0) - (Number(row[rabIndex]) || 0) - (Number(row[paIndex]) || 0)]
   })
   sheet.getRange(2, remainingIndex + 1, remainingValues.length, 1).setValues(remainingValues)
@@ -670,7 +673,7 @@ function publicDashboard_() {
       notes: String(value(indexes.notes) || ''), totalFinal: number(indexes.pagu), totalPrk: number(indexes.totalPrk),
       rabTotal: number(indexes.rab), paTotal, paFinalized, contractValue: number(indexes.contract),
       billed: number(indexes.billed), paid: number(indexes.paid),
-      prkRemaining: number(indexes.pagu) - number(indexes.rab) - paTotal,
+      prkRemaining: prk ? number(indexes.pagu) - number(indexes.rab) - paTotal : '',
       projectedBilling: number(indexes.projectedBilling),
     }
   }).filter((record) => (record.prk.trim() || record.rabNumber.trim())
@@ -687,7 +690,7 @@ function publicDashboard_() {
     group.contract += record.contractValue
     group.billed += record.billed
     group.paid += record.paid
-    group.remainingPrk += record.prkRemaining
+    group.remainingPrk += Number(record.prkRemaining) || 0
     group.projectedBilling += record.projectedBilling
     if (record.contractValue > 0) group.contractCount += 1
     groups.set(key, group)

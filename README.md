@@ -41,7 +41,7 @@ Pilih file `.xlsx`. Aplikasi mencari sheet `DATA ANGGARAN INVESTASI` atau `DATA 
 
 Kolom yang dipetakan meliputi No. PRK, No. PRK SKKI/Fix, No. WBS, Pos Anggaran, No. RAB, No. PA, Uraian, Total PRK, Relokasi, Revisi SKKI, Total Akhir, Total RAB/PA, No. Kontrak, Vendor, Nilai Kontrak, Pengembalian PA, Penggantian Biaya, Tagihan, Total Bayar, Sisa PRK, Program, Tahun Anggaran, Keterangan, serta kolom AA-AG: Tanggal Awal, Tanggal Akhir, Rencana Kontrak, Rencana Tagih, Progress, Proyeksi Tagih, dan Tanggal Bayar.
 
-Dashboard setelah login menampilkan AI Total dan ringkasan total RAB, PA, kontrak, tagihan, pembayaran, serta sisa PRK. Rincian Murni dan Lanjutan/Luncuran ditampilkan di bawah ringkasan utama dengan persentase dua desimal. Dashboard publik memakai tata letak ringkasan dan kartu program pada gambar revisi. Kedua dashboard hanya menghitung baris PRK yang memiliki nilai `TOTAL AKHIR` (kolom L), sehingga baris detail yang mengulang angka tidak terhitung ganda; tagihan dan pembayaran dibandingkan dengan nilai kontrak.
+Dashboard setelah login menampilkan AI Total dan ringkasan total RAB, PA, kontrak, tagihan, pembayaran, serta sisa PRK. Rincian Murni dan Lanjutan/Luncuran ditampilkan di bawah ringkasan utama dengan persentase dua desimal. Dashboard publik memakai tata letak ringkasan dan kartu program pada gambar revisi. Kedua dashboard hanya menghitung baris PRK yang memiliki nilai `TOTAL AKHIR` (kolom L), sehingga baris detail yang mengulang angka tidak terhitung ganda; tagihan dan pembayaran dibandingkan dengan nilai kontrak. Sisa PRK hanya dihitung dan dijumlahkan pada baris yang memiliki `NO.PRK`, dengan rumus `TOTAL AKHIR - TOTAL RAB - TOTAL PA`; baris detail tanpa No. PRK tidak menambah nilai sisa.
 
 ## Alur Input RAB dan Realisasi
 
