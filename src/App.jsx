@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity, ArrowDownToLine, ArrowUpFromLine, BarChart3, Boxes, Check, ChevronDown,
   CircleAlert, ClipboardList, Cloud, FileSpreadsheet, FolderKanban, LayoutDashboard, LoaderCircle,
@@ -7,6 +7,8 @@ import {
 import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { exportWorkbook, formatCurrency, importWorkbook, parseRupiahPrice, sampleRecords } from './lib/workbook.js'
 import { applyFinalizedPaBalances, summarizePublicDashboard } from './lib/publicDashboard.js'
+import { findProgramRecordForRabGroup } from './lib/rabReferences.js'
+import { calculateRabBudgetTotal, calculateRabTotalsByProgramRecord } from './lib/rabTotals.js'
 import RabWorkflow from './RabWorkflow.jsx'
 import danantaraLogo from '../logo/Danantara_Indonesia_(no_SW).svg.webp'
 import plnLogo from '../logo/Logo_PLN.png'
@@ -23,14 +25,16 @@ const SESSION_KEY = 'rab-monitor-session-v1'
 const YEAR_OPTIONS = ['2024', '2025', '2026', '2027', '2028', '2029', '2030']
 const EMPTY_COLLECTIONS = { materials: [], activityCatalog: [], components: [], activities: [], paTransfers: [], materialRecap: [], realizations: [] }
 const WORKFLOW_NAV = [
-  { id: 'components', label: 'RAB', icon: Wrench, section: 'PERENCANAAN RAB' },
-  { id: 'activities', label: 'Rekap RAB', icon: ClipboardList },
-  { id: 'paFinalization', collection: 'paTransfers', label: 'Finalisasi ke PA', icon: ArrowDownToLine },
   { id: 'contracts', label: 'Data Kontrak', icon: FileText },
   { id: 'realizations', label: 'Realisasi', icon: Activity },
 ]
 
 const hasContractNumber = (record) => String(record.contractNumber ?? '').trim().length > 0
+const hasContractDetails = (record) => hasContractNumber(record)
+  || String(record.vendor ?? '').trim().length > 0
+  || Number(record.contractValue) > 0
+  || ['startDate', 'endDate', 'plannedContract', 'plannedBilling', 'progress', 'projectedBilling', 'paymentDate']
+    .some((key) => String(record[key] ?? '').trim().length > 0)
 function getNotesCategory(record) {
   const value = String(record.notes || record.program || '').trim()
   if (/lanjutan|luncuran/i.test(value)) return 'Lanjutan'
@@ -143,6 +147,7 @@ function App() {
   const [publicRows, setPublicRows] = useState(() => (publicCache?.rows || []).map((row, index) => ({ ...row, id: `public-row-${index}` })))
   const [workflowCollections, setWorkflowCollections] = useState(EMPTY_COLLECTIONS)
   const [activeView, setActiveView] = useState('overview')
+  const [rabEditRecordId, setRabEditRecordId] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedYear, setSelectedYear] = useState('all')
   const [selectedProgram, setSelectedProgram] = useState('all')
@@ -155,11 +160,13 @@ function App() {
   const [notice, setNotice] = useState('')
   const [logoutPending, setLogoutPending] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(() => Boolean(readSession()?.token))
+  const [rabMenuOpen, setRabMenuOpen] = useState(false)
   const [managementOpen, setManagementOpen] = useState(false)
   const [publicUpdatedAt, setPublicUpdatedAt] = useState(() => publicCache?.updatedAt || null)
   const [publicLoading, setPublicLoading] = useState(true)
   const [publicError, setPublicError] = useState('')
   const fileInput = useRef(null)
+  const clearRabEditRecord = useCallback(() => setRabEditRecordId(''), [])
 
   useEffect(() => {
     let cancelled = false
@@ -450,6 +457,35 @@ function App() {
     }
   }
 
+  async function synchronizeRabTotals(
+    activities,
+    components,
+    previousActivities,
+    previousComponents,
+    onProgress,
+  ) {
+    const totalsByRecord = calculateRabTotalsByProgramRecord(
+      records,
+      activities,
+      components,
+      workflowCollections.activityCatalog,
+      workflowCollections.paTransfers,
+      previousActivities,
+      previousComponents,
+    )
+    const updatedProgramRecords = records.map((record) => {
+      const total = totalsByRecord.get(String(record.id))
+      return total === undefined || Number(record.rabTotal || 0) === total
+        ? record
+        : { ...record, rabTotal: total }
+    })
+    if (updatedProgramRecords.every((record, index) => record === records[index])) {
+      return { ok: true, message: '' }
+    }
+    onProgress?.('sheets')
+    return saveRecords(updatedProgramRecords, 'TOTAL RAB per PRK diperbarui.')
+  }
+
   async function saveWorkflowCollection(collection, nextRecords, successMessage, onProgress) {
     const nextCollections = { ...workflowCollections, [collection]: nextRecords }
     setWorkflowCollections(nextCollections)
@@ -457,56 +493,22 @@ function App() {
     onProgress?.('local')
     let relatedRecordsSaved = true
     let relatedRecordsError = ''
-    if (collection === 'activities' || collection === 'components') {
-      const activitiesForTotals = collection === 'activities' ? nextRecords : workflowCollections.activities
-      const componentsForTotals = collection === 'components' ? nextRecords : workflowCollections.components
-      const affectedRecords = new Set()
-      const addAffectedRecord = (activity) => {
-        const record = records.find((item) => activity.programRecordId
-          ? item.id === activity.programRecordId
-          : item.prk === activity.prk || item.rabNumber === activity.rabNumber)
-        if (record) affectedRecords.add(record.id)
-        return record
-      }
-      workflowCollections.activities.forEach(addAffectedRecord)
-      activitiesForTotals.forEach(addAffectedRecord)
-      const totalsByRecord = new Map()
-      activitiesForTotals.forEach((activity) => {
-        const sourceRecord = addAffectedRecord(activity)
-        if (!sourceRecord) return
-        if (activity.materialId) {
-          const lineTotal = activity.total !== undefined
-            ? Number(activity.total || 0)
-            : (Number(activity.materialPrice || 0) + Number(activity.servicePrice || 0)) * Number(activity.volume || 0)
-          totalsByRecord.set(sourceRecord.id, (totalsByRecord.get(sourceRecord.id) || 0) + lineTotal)
-          return
-        }
-        const componentsForActivity = componentsForTotals.filter((component) =>
-          component.activity.trim().toLowerCase() === activity.name.trim().toLowerCase())
-        const prkComponents = componentsForActivity.filter((component) =>
-          String(component.prk || '').trim() === String(activity.prk || '').trim())
-        const matchingComponents = prkComponents.length
-          ? prkComponents
-          : componentsForActivity.filter((component) => !String(component.prk || '').trim())
-        const unitCost = matchingComponents.reduce((sum, component) => sum
-          + Number(component.quantityPerUnit || 0) * (Number(component.materialPrice || 0) + Number(component.servicePrice || 0)), 0)
-        totalsByRecord.set(sourceRecord.id, (totalsByRecord.get(sourceRecord.id) || 0) + unitCost * Number(activity.volume || 0))
-      })
-      const updatedProgramRecords = records.map((record) => affectedRecords.has(record.id)
-        ? { ...record, rabTotal: totalsByRecord.get(record.id) || 0 }
-        : record)
-      if (updatedProgramRecords.some((record, index) => record !== records[index])) {
-        onProgress?.('sheets')
-        const relatedSave = await saveRecords(updatedProgramRecords, 'Total RAB per PRK diperbarui.')
-        relatedRecordsSaved = relatedSave?.ok !== false
-        relatedRecordsError = relatedSave?.message || ''
-      }
-    }
     try {
       onProgress?.('sheets')
       const response = await apiPost({ action: 'saveWorkflow', collection, records: nextRecords })
       const result = await response.json()
       if (!response.ok || !result.ok) throw new Error(result.error || 'Penyimpanan Google Sheets gagal.')
+      if (collection === 'components') {
+        const relatedSave = await synchronizeRabTotals(
+          workflowCollections.activities,
+          nextRecords,
+          workflowCollections.activities,
+          workflowCollections.components,
+          onProgress,
+        )
+        relatedRecordsSaved = relatedSave?.ok !== false
+        relatedRecordsError = relatedSave?.message || ''
+      }
       if (collection === 'realizations' && result.updatedRecords?.length) {
         const recordsById = new Map(result.updatedRecords.map((record) => [String(record.id), record]))
         const updatedProgramRecords = records.map((record) => recordsById.has(String(record.id))
@@ -531,16 +533,18 @@ function App() {
     }
   }
 
-  async function transferToPA(transfer) {
-    const source = records.find((record) => record.id === transfer.recordId)
+  async function transferToPA(transfer, { confirm = true, sourceOverride = null } = {}) {
+    const source = sourceOverride || records.find((record) => String(record.id) === String(transfer.recordId))
     const amount = Number(transfer.amount) || 0
     const remaining = Number(source?.rabTotal) || 0
     if (!source || amount <= 0 || amount > remaining) {
       setNotice('Finalisasi ditolak: nilai harus lebih dari nol dan tidak melebihi sisa RAB.')
       return false
     }
-    const confirmed = window.confirm(`Finalisasi ${formatCurrency(amount)} dari RAB ${source.prk || source.rabNumber} ke PA? Sisa RAB berkurang, saldo PA bertambah, dan kolom nilai kontrak mengikuti nilai PA.`)
-    if (!confirmed) return false
+    if (confirm) {
+      const confirmed = window.confirm(`Finalisasi ${formatCurrency(amount)} dari RAB ${source.prk || source.rabNumber} ke PA? Sisa RAB berkurang dan saldo PA bertambah.`)
+      if (!confirmed) return false
+    }
 
     try {
       const response = await apiPost({ action: 'transferToPA', ...transfer })
@@ -550,9 +554,9 @@ function App() {
         ...source,
         rabTotal: Math.max(0, remaining - amount),
         paTotal: Number(source.paTotal || 0) + amount,
-        contractValue: Number(source.paTotal || 0) + amount,
+        contractValue: Number(source.contractValue || 0),
       }
-      const nextRecords = records.map((record) => record.id === source.id ? updatedRecord : record)
+      const nextRecords = records.map((record) => String(record.id) === String(source.id) ? updatedRecord : record)
       setRecords(nextRecords)
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextRecords))
       const nextTransfers = [result.transfer, ...workflowCollections.paTransfers]
@@ -560,11 +564,116 @@ function App() {
       setWorkflowCollections(nextCollections)
       window.localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(nextCollections))
       setConnection('cloud')
-      setNotice(`Finalisasi ${formatCurrency(amount)} berhasil. Sisa RAB ${formatCurrency(updatedRecord.rabTotal)}; saldo PA/nilai kontrak ${formatCurrency(updatedRecord.paTotal)}.`)
-      return true
+      setNotice(`Finalisasi ${formatCurrency(amount)} berhasil. Sisa RAB ${formatCurrency(updatedRecord.rabTotal)}; saldo PA ${formatCurrency(updatedRecord.paTotal)}.`)
+      return updatedRecord
     } catch (error) {
       setNotice(`Finalisasi tidak tersimpan: ${error.message}`)
       return false
+    }
+  }
+
+  async function finalizeRabToPA({ group }) {
+    let sourceRecord = findProgramRecordForRabGroup(records, group)
+    if (!sourceRecord) {
+      const message = `Finalisasi gagal: data anggaran untuk PRK ${group.prk || '-'} tidak ditemukan.`
+      setNotice(message)
+      return { ok: false, message }
+    }
+    const transferAmount = Number(group.totalAnggaran ?? calculateRabBudgetTotal(group.total)) || 0
+    if (transferAmount <= 0) {
+      return { ok: false, message: 'Total RAB harus lebih besar dari nol.' }
+    }
+    if (transferAmount > Number(sourceRecord.rabTotal || 0)) {
+      const sourceHasTransfers = workflowCollections.paTransfers.some((transfer) =>
+        String(transfer.recordId) === String(sourceRecord.id))
+      if (sourceHasTransfers) {
+        return { ok: false, message: 'Sinkronisasi dibatalkan karena PRK ini sudah memiliki riwayat PA. Periksa TOTAL RAB di kolom M agar saldo PA tidak tertimpa.' }
+      }
+      const synced = await linkRabGroupToProgramRecord({ group })
+      if (!synced.ok || !synced.sourceRecord) {
+        return { ok: false, message: synced.message || 'TOTAL RAB gagal disinkronkan dari kegiatan dan PRK.' }
+      }
+      sourceRecord = synced.sourceRecord
+    }
+    if (transferAmount > Number(sourceRecord.rabTotal || 0)) {
+      return { ok: false, message: `Total RAB ${formatCurrency(transferAmount)} melebihi TOTAL RAB ${formatCurrency(sourceRecord.rabTotal)} pada RABData.` }
+    }
+    const updatedRecord = await transferToPA({
+      recordId: sourceRecord.id,
+      amount: transferAmount,
+      date: new Date().toISOString().slice(0, 10),
+      notes: `FINALIZED_RAB_GROUP::${group.finalizationKey || group.key}`,
+      rabGroupKey: group.finalizationKey || group.key,
+      preserveContractValue: true,
+    }, { confirm: false, sourceOverride: sourceRecord })
+    if (!updatedRecord) return { ok: false, finalized: false, message: 'Finalisasi RAB ke PA gagal.' }
+    return {
+      ok: true,
+      finalized: true,
+      message: `RAB berhasil dipindahkan ke PA. Nomor kontrak, nilai kontrak, vendor, dan tanggal dapat dilengkapi nanti melalui menu Data Kontrak.`,
+    }
+  }
+
+  async function linkRabGroupToProgramRecord({ group }) {
+    const sourceRecord = findProgramRecordForRabGroup(records, group)
+    if (!sourceRecord) {
+      return { ok: false, message: 'Baris RABData yang cocok berdasarkan PRK dan kegiatan tidak ditemukan atau tidak unik.' }
+    }
+    const groupActivityIds = new Set((group.records || []).map((activity) => String(activity.id)))
+    if (!groupActivityIds.size) {
+      return { ok: false, message: 'Baris Rekap RAB tidak ditemukan untuk ditautkan.' }
+    }
+
+    const nextActivities = workflowCollections.activities.map((activity) =>
+      groupActivityIds.has(String(activity.id))
+        ? {
+          ...activity,
+          prk: sourceRecord.prk || activity.prk,
+          programRecordId: sourceRecord.id,
+          program: sourceRecord.program || activity.program || '',
+          year: sourceRecord.year || activity.year || '',
+        }
+        : activity)
+    const linkedCount = nextActivities.filter((activity) => groupActivityIds.has(String(activity.id))
+      && String(activity.programRecordId) === String(sourceRecord.id)).length
+    if (linkedCount !== groupActivityIds.size) {
+      return { ok: false, message: 'Tidak semua baris Rekap RAB berhasil ditemukan untuk ditautkan.' }
+    }
+
+    const syncedActivities = nextActivities.filter((activity) =>
+      String(activity.programRecordId) === String(sourceRecord.id)
+        || (!activity.programRecordId && String(activity.prk || '').trim()
+          && String(activity.prk || '').trim() === String(sourceRecord.prk || '').trim()))
+    const rabTotal = syncedActivities.reduce((total, activity) => {
+      if (activity.total !== undefined) return total + Number(activity.total || 0)
+      return total + (Number(activity.materialPrice || 0) + Number(activity.servicePrice || 0))
+        * Number(activity.quantityPerUnit ?? 1) * Number(activity.volume || 0)
+    }, 0)
+
+    const nextCollections = { ...workflowCollections, activities: nextActivities }
+    setWorkflowCollections(nextCollections)
+    window.localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(nextCollections))
+    try {
+      const workflowResponse = await apiPost({ action: 'saveWorkflow', collection: 'activities', records: nextActivities })
+      const workflowResult = await workflowResponse.json()
+      if (!workflowResponse.ok || !workflowResult.ok) {
+        throw new Error(workflowResult.error || 'Penyimpanan tautan kegiatan ke Google Sheets gagal.')
+      }
+    } catch (error) {
+      setConnection('local')
+      return { ok: false, message: `Tautan kegiatan tersimpan lokal, tetapi gagal disinkronkan: ${error.message}` }
+    }
+
+    const nextRecords = records.map((record) => String(record.id) === String(sourceRecord.id)
+      ? { ...record, rabTotal }
+      : record)
+    const saved = await saveRecords(nextRecords, 'TOTAL RAB berhasil disinkronkan berdasarkan kegiatan dan PRK.')
+    if (!saved.ok) return { ok: false, message: saved.message }
+
+    return {
+      ok: true,
+      message: saved.message,
+      sourceRecord: nextRecords.find((record) => String(record.id) === String(sourceRecord.id)),
     }
   }
 
@@ -572,6 +681,10 @@ function App() {
     const source = records.find((record) => String(record.id) === String(transfer.recordId))
     if (!source) {
       setNotice('Pembatalan ditolak: data PRK sumber tidak ditemukan.')
+      return false
+    }
+    if (hasContractDetails(source)) {
+      setNotice('Pembatalan ditolak: data kontrak sudah diisi. Perubahan PA harus diselesaikan melalui administrasi kontrak.')
       return false
     }
     const confirmed = window.confirm(`Batalkan transfer ${formatCurrency(transfer.amount)} untuk PRK ${transfer.prk || source.prk || source.rabNumber}? Saldo RAB dan PA akan dikembalikan ke sebelum transfer.`)
@@ -660,7 +773,7 @@ function App() {
   }
 
   const pageTitle = {
-    overview: 'Dashboard', data: 'Detail AI', materials: 'Input Material', activityCatalog: 'Master Kegiatan', components: 'RAB',
+    overview: 'Dashboard', data: 'Detail AI', materials: 'Input Material', activityCatalog: 'Master Kegiatan', components: 'Input RAB',
     activities: 'Rekap RAB', paFinalization: 'Finalisasi ke PA', contracts: 'Data Kontrak', users: 'Manajemen User', materialRecap: 'Rekap Material', realizations: 'Realisasi',
   }[activeView] || 'Dashboard'
   const canEdit = Boolean(auth && auth.user.role !== 'viewer' && authDataReady && !authDataLoading)
@@ -680,6 +793,15 @@ function App() {
         <div className="workspace-label">RAB &amp; MONITORING</div>
         <nav className="side-nav" aria-label="Navigasi utama">
           <button className={activeView === 'overview' ? 'nav-item active' : 'nav-item'} onClick={() => setActiveView('overview')}><LayoutDashboard size={18} /><span>Dashboard</span></button>
+          {auth && <div className="nav-management">
+            <button className={`nav-item${['components', 'activities'].includes(activeView) ? ' active' : ''}`} aria-expanded={rabMenuOpen} onClick={() => setRabMenuOpen((open) => !open)}>
+              <ClipboardList size={18} /><span>RAB</span><ChevronDown className={`nav-chevron${rabMenuOpen ? ' is-open' : ''}`} size={15} />
+            </button>
+            {rabMenuOpen && <div className="nav-submenu">
+              <button className={activeView === 'components' ? 'nav-item nav-subitem active' : 'nav-item nav-subitem'} onClick={() => setActiveView('components')}><Wrench size={16} /><span>Input RAB</span><span className="nav-count">{workflowCollections.components.length}</span></button>
+              <button className={activeView === 'activities' ? 'nav-item nav-subitem active' : 'nav-item nav-subitem'} onClick={() => setActiveView('activities')}><ClipboardList size={16} /><span>Rekap RAB</span><span className="nav-count">{workflowCollections.components.length}</span></button>
+            </div>}
+          </div>}
           {auth && WORKFLOW_NAV.map((item) => {
             const Icon = item.icon
             return <div className="nav-group" key={item.id}>
@@ -753,9 +875,9 @@ function App() {
           </> : activeView === 'contracts' && auth ? <>
             <section className="page-heading data-heading"><div><p className="eyebrow">ADMINISTRASI PENGADAAN</p><h1>Data Kontrak</h1><p className="heading-subtitle">Catat nomor kontrak, vendor pemenang, dan nilai kontrak aktual per PRK/RAB.</p></div></section>
             <div className="table-footnote contract-guidance"><ShieldCheck size={14} /> Nilai PA adalah alokasi/pagu. Nilai kontrak diisi sesuai kontrak pemenang dan tidak otomatis mengikuti saldo PA.</div>
-            <ContractTable records={contractRecords} onEdit={canEdit ? setEditingRecord : undefined} readOnly={!canEdit} />
+            <ContractTable records={contractRecords} workflowCollections={workflowCollections} onEdit={canEdit ? setEditingRecord : undefined} readOnly={!canEdit} />
           </> : activeView === 'users' && isAdmin ? <UserManagement />
-            : auth && activeView !== 'overview' ? <RabWorkflow key={activeView} view={activeView} collections={workflowCollections} programRecords={records} onSave={saveWorkflowCollection} onTransfer={transferToPA} onCancelTransfer={cancelTransferFromPA} readOnly={!canEdit} />
+            : auth && activeView !== 'overview' ? <RabWorkflow key={activeView} view={activeView} collections={workflowCollections} programRecords={records} onSave={saveWorkflowCollection} onTransfer={transferToPA} onFinalizeRab={finalizeRabToPA} onCancelTransfer={cancelTransferFromPA} onEditRab={(record) => { setRabEditRecordId(record.id); setActiveView('components') }} editComponentId={rabEditRecordId} onEditComponentHandled={clearRabEditRecord} readOnly={!canEdit} />
               : null}
           <footer className="page-footer"><span>PLN <span className="footer-separator">/</span> RAB &amp; Realisasi</span><span>Data tersimpan {connection === 'cloud' ? 'di Google Sheets' : 'di browser ini'}</span></footer>
         </div>
@@ -791,14 +913,51 @@ function App() {
   )
 }
 
-function ContractTable({ records, onEdit, readOnly = false }) {
+function ContractTable({ records, workflowCollections, onEdit, readOnly = false }) {
+  const [prkNameSearch, setPrkNameSearch] = useState('')
+  const [activitySearch, setActivitySearch] = useState('')
+  const components = workflowCollections.components || []
+  const activityCatalog = workflowCollections.activityCatalog || []
+  const activityOptions = [...new Set([
+    ...components.flatMap((component) => [
+      component.workPackage,
+      component.activity,
+      activityCatalog.find((activity) =>
+        String(activity.prk || '').trim() === String(component.prk || '').trim()
+          && String(activity.name || '').trim().toLowerCase() === String(component.activity || '').trim().toLowerCase()
+      )?.workPackage,
+    ]),
+    ...activityCatalog.flatMap((activity) => [activity.workPackage, activity.name]),
+  ].map((value) => String(value || '').trim()).filter(Boolean))].sort()
+  const filteredRecords = records.filter((record) =>
+    String(record.description || '').toLowerCase().includes(prkNameSearch.trim().toLowerCase())
+      && (!activitySearch.trim() || (() => {
+        const matchingComponents = components.filter((component) =>
+          String(component.programRecordId || '') === String(record.id)
+            || (String(component.prk || '').trim() && String(component.prk || '').trim() === String(record.prk || '').trim())
+        )
+        const matchingActivityCatalog = activityCatalog.filter((activity) =>
+          String(activity.prk || '').trim() === String(record.prk || '').trim()
+        )
+        const activityNames = [
+          ...matchingComponents.flatMap((component) => [component.workPackage, component.activity]),
+          ...matchingActivityCatalog.flatMap((activity) => [activity.workPackage, activity.name]),
+        ]
+        return activityNames.some((name) => String(name || '').toLowerCase().includes(activitySearch.trim().toLowerCase()))
+      })())
+  )
+
   return <section className="panel table-panel">
-    <div className="table-heading"><div><p className="eyebrow">PAKET DENGAN ALOKASI PA</p><h2>Daftar data kontrak</h2></div><span className="row-count">{records.length} data</span></div>
+    <div className="table-heading"><div><p className="eyebrow">PAKET DENGAN ALOKASI PA</p><h2>Daftar data kontrak</h2></div><span className="row-count">{filteredRecords.length} dari {records.length} data</span></div>
+    <div className="table-toolbar contract-table-filters">
+      <label className="search-field contract-filter-field"><Search size={15} /><input type="search" list="contract-prk-names" value={prkNameSearch} onChange={(event) => setPrkNameSearch(event.target.value)} placeholder="Cari nama PRK..." aria-label="Filter nama PRK" /><datalist id="contract-prk-names">{[...new Set(records.map((record) => String(record.description || '').trim()).filter(Boolean))].sort().map((name) => <option key={name} value={name} />)}</datalist></label>
+      <label className="search-field contract-filter-field"><Search size={15} /><input type="search" list="contract-activities" value={activitySearch} onChange={(event) => setActivitySearch(event.target.value)} placeholder="Cari kegiatan..." aria-label="Filter kegiatan" /><datalist id="contract-activities">{activityOptions.map((activity) => <option key={activity} value={activity} />)}</datalist></label>
+    </div>
     <div className="table-scroll contract-register-scroll"><table><thead><tr><th>No. PRK / RAB</th><th>Uraian</th><th>Nilai PA</th><th>Nomor kontrak</th><th>Vendor pemenang</th><th>Nilai kontrak</th><th>Status</th><th><span className="sr-only">Aksi</span></th></tr></thead><tbody>
-      {records.length ? records.map((record) => {
+      {filteredRecords.length ? filteredRecords.map((record) => {
         const complete = hasContractNumber(record) && String(record.vendor ?? '').trim() && Number(record.contractValue) > 0
         return <tr key={record.id}><td>{record.prk || record.rabNumber || '-'}</td><td className="contract-register-description">{record.description || '-'}</td><td className="money-cell">{formatCurrency(record.paTotal)}</td><td className="contract-register-detail" title={record.contractNumber || undefined}>{record.contractNumber || '-'}</td><td className="contract-register-detail" title={record.vendor || undefined}>{record.vendor || '-'}</td><td className="money-cell">{formatCurrency(record.contractValue)}</td><td><span className={`contract-status ${complete ? 'is-complete' : ''}`}>{complete ? 'Lengkap' : 'Perlu dilengkapi'}</span></td><td>{!readOnly && <button className="row-action" aria-label={`Input kontrak ${record.prk || record.rabNumber || record.description}`} onClick={() => onEdit?.(record)}><Pencil size={15} /></button>}</td></tr>
-      }) : <tr><td colSpan="8"><div className="empty-table"><FileText size={24} /><strong>Belum ada data PA atau kontrak</strong><span>Data akan muncul setelah finalisasi ke PA atau impor data kontrak.</span></div></td></tr>}
+      }) : <tr><td colSpan="8"><div className="empty-table"><FileText size={24} /><strong>{records.length ? 'Tidak ada data yang cocok' : 'Belum ada data PA atau kontrak'}</strong><span>{records.length ? 'Ubah filter PRK atau nama kegiatan.' : 'Data akan muncul setelah finalisasi ke PA atau impor data kontrak.'}</span></div></td></tr>}
     </tbody></table></div>
     <div className="table-summary"><span>Lengkapi nomor kontrak, vendor pemenang, dan nilai aktual.</span><span><span className="summary-dot" /> Data tersimpan pada rekap RAB</span></div>
   </section>

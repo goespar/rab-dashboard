@@ -8,6 +8,182 @@ import ExcelJS from 'exceljs'
 import appsScriptHandler from '../api/apps-script.js'
 import { importWorkbook, parseNumber } from '../src/lib/workbook.js'
 import { applyFinalizedPaBalances, summarizePublicDashboard } from '../src/lib/publicDashboard.js'
+import { findProgramRecordForRabGroup } from '../src/lib/rabReferences.js'
+import { calculateRabTotalsByProgramRecord } from '../src/lib/rabTotals.js'
+
+test('finds the source budget row by normalized PRK or fixed PRK reference', () => {
+  const sourceRecord = { id: 'budget-1', prk: 'OTHER-PRK', prkFix: 'MRN-62.SAR-01', rabTotal: 5000 }
+  const group = { prk: 'MRN 62 SAR 01', records: [{ programRecordId: '' }] }
+
+  assert.equal(findProgramRecordForRabGroup([sourceRecord], group), sourceRecord)
+})
+
+test('uses the saved budget-row link when the RAB PRK label has changed', () => {
+  const sourceRecord = { id: 'budget-1', prk: 'LAN-62.SAR-01', rabTotal: 5000 }
+  const group = { prk: 'MRN-62.SAR-01', sourcePrk: 'LAN-62.SAR-01', records: [{ programRecordId: 'budget-1' }] }
+
+  assert.equal(findProgramRecordForRabGroup([sourceRecord], group), sourceRecord)
+})
+
+test('resolves a legacy RAB group through its corrected source PRK', () => {
+  const sourceRecord = { id: 'budget-1', prk: 'LAN-62.SAR-01', rabTotal: 5000 }
+  const group = { prk: 'MRN-62.SAR-01', sourcePrk: 'LAN-62.SAR-01', records: [] }
+
+  assert.equal(findProgramRecordForRabGroup([sourceRecord], group), sourceRecord)
+})
+
+test('rejects an old linked record when its PRK does not match the activity PRK', () => {
+  const oldRecord = { id: 'old-row', prk: 'MRN-62.SAR-01', description: 'Kegiatan lama' }
+  const matchingRecord = { id: 'new-row', prk: 'LAN-62.SAR-01', description: 'Kegiatan penyambungan' }
+  const group = {
+    prk: 'MRN-62.SAR-01',
+    sourcePrk: 'LAN-62.SAR-01',
+    workPackage: 'Kegiatan penyambungan',
+    records: [{ programRecordId: 'old-row' }],
+  }
+
+  assert.equal(findProgramRecordForRabGroup([oldRecord, matchingRecord], group), matchingRecord)
+})
+
+test('uses activity name to disambiguate records sharing a PRK', () => {
+  const otherRecord = { id: 'other-row', prk: 'PRK-01', description: 'Kegiatan lain' }
+  const matchingRecord = { id: 'matching-row', prk: 'PRK-01', description: 'Penyambungan pelanggan' }
+  const group = { prk: 'PRK-01', workPackage: 'Penyambungan pelanggan', records: [] }
+
+  assert.equal(findProgramRecordForRabGroup([otherRecord, matchingRecord], group), matchingRecord)
+})
+
+test('matches the exact RABData activity description when the PRK is stored only in the activity catalog', () => {
+  const prkOnlyRow = { id: 'prk-row', prk: 'MRN-62.SAR-PENYAMBUNGAN PELANGGAN TM BARA', description: 'MRN-62.SAR-PENYAMBUNGAN PELANGGAN TM BARA', rabTotal: 0 }
+  const activityRow = { id: 'activity-row', prk: '', description: 'Pengadaan dan Pemasangan Joint Terminasi MVTC Program Pemasaran UP3 Bali Utara Tahun 2026', rabTotal: 0 }
+  const group = {
+    prk: 'MRN-62.SAR-PENYAMBUNGAN PELANGGAN TM BARA',
+    workPackage: 'Pengadaan dan Pemasangan Joint Terminasi MVTC Program Pemasaran UP3 Bali Utara Tahun 2026',
+    records: [],
+  }
+
+  assert.equal(findProgramRecordForRabGroup([prkOnlyRow, activityRow], group), activityRow)
+})
+
+test('synchronizes the saved Input RAB total including VAT to the matching RABData row', () => {
+  const prk = 'LAN-62.SAR-PENYAMBUNGAN BARU TEGANGAN RENDAH (TR) BARA'
+  const source = {
+    id: 'budget-row',
+    prk,
+    description: 'Kegiatan Penyambungan Baru',
+    rabTotal: 0,
+    paTotal: 297801882,
+  }
+  const component = {
+    id: 'rab-line',
+    prk,
+    workPackage: 'Kegiatan Penyambungan Baru',
+    activity: 'Material Sambungan',
+    rabTitle: 'Paket A',
+    rabNumber: 'RAB-1',
+    materialId: 'material-1',
+    totalPart: 8030722,
+  }
+  const catalog = [{
+    prk,
+    name: 'Material Sambungan',
+    workPackage: 'Kegiatan Penyambungan Baru',
+  }]
+
+  const totals = calculateRabTotalsByProgramRecord(
+    [source],
+    [],
+    [component],
+    catalog,
+    [],
+  )
+
+  assert.equal(totals.get(source.id), 8914101)
+  const afterTransfer = calculateRabTotalsByProgramRecord(
+    [source],
+    [],
+    [component],
+    catalog,
+    [{
+      recordId: source.id,
+      amount: 8914101,
+      notes: `FINALIZED_RAB_GROUP::${prk}::kegiatan penyambungan baru::paket a::rab-1`,
+    }],
+  )
+  assert.equal(afterTransfer.get(source.id), 0)
+})
+
+test('does not calculate column M from standalone legacy recap rows without Input RAB', () => {
+  const prk = 'LAN-62.SAR-PENYAMBUNGAN BARU TEGANGAN RENDAH (TR) BARA'
+  const source = { id: 'budget-row', prk, description: 'Kegiatan Penyambungan Baru', rabTotal: 0 }
+  const legacyRecap = {
+    id: 'legacy-recap-line',
+    prk,
+    workPackage: 'Kegiatan Penyambungan Baru',
+    componentName: 'Material Sambungan',
+    rabTitle: 'Paket A',
+    rabNumber: 'RAB-1',
+    total: 8030722,
+  }
+  const catalog = [{
+    prk,
+    name: 'Material Sambungan',
+    workPackage: 'Kegiatan Penyambungan Baru',
+  }]
+  const totals = calculateRabTotalsByProgramRecord([source], [legacyRecap], [], catalog, [])
+
+  assert.equal(totals.get(source.id), 0)
+})
+
+test('uses saved Input RAB components instead of stale recap rows', () => {
+  const prk = 'LAN-62.SAR-PENYAMBUNGAN BARU TEGANGAN RENDAH (TR) BARA'
+  const source = { id: 'budget-row', prk, description: 'Kegiatan Penyambungan Baru', rabTotal: 0 }
+  const component = {
+    id: 'component-line',
+    prk,
+    workPackage: 'Kegiatan Penyambungan Baru',
+    activity: 'Material Sambungan',
+    rabTitle: 'Paket A',
+    rabNumber: 'RAB-1',
+    totalPart: 8030722,
+  }
+  const catalog = [{
+    prk,
+    name: 'Material Sambungan',
+    workPackage: 'Kegiatan Penyambungan Baru',
+  }]
+
+  const staleRecap = {
+    id: 'stale-recap-line',
+    prk,
+    workPackage: 'Kegiatan Penyambungan Baru',
+    componentName: 'Material Sambungan',
+    rabTitle: 'Paket A',
+    rabNumber: 'RAB-1',
+    materialId: 'material-1',
+    total: 100,
+  }
+  const totals = calculateRabTotalsByProgramRecord(
+    [source],
+    [staleRecap],
+    [component],
+    catalog,
+    [],
+    [],
+    [],
+  )
+
+  assert.equal(totals.get(source.id), 8914101)
+})
+
+test('does not guess when multiple source budget rows match the PRK', () => {
+  const records = [
+    { id: 'budget-1', prk: 'PRK-01', program: 'Program A', year: '2025' },
+    { id: 'budget-2', prk: 'PRK 01', program: 'Program B', year: '2026' },
+  ]
+
+  assert.equal(findProgramRecordForRabGroup(records, { prk: 'PRK.01', records: [] }), null)
+})
 
 test('imports No. RAB-only rows with distinct sheet row IDs', async () => {
   const workbook = new ExcelJS.Workbook()
@@ -25,6 +201,25 @@ test('imports No. RAB-only rows with distinct sheet row IDs', async () => {
   assert.equal(result.records[0].id, 'DATAANGGARANINVESTASI-row-2')
   assert.equal(result.records[0].prk, '')
   assert.equal(result.records[0].rabNumber, 'RAB-42')
+})
+
+test('imports activity PRKs using their column headers rather than fixed positions', async () => {
+  const workbook = new ExcelJS.Workbook()
+  const budgetSheet = workbook.addWorksheet('DATA ANGGARAN INVESTASI')
+  budgetSheet.addRow(['NO.PRK', 'URAIAN', 'TOTAL RAB', 'NILAI KONTRAK'])
+  budgetSheet.addRow(['LAN-62.SAR-PENYAMBUNGAN BARU TEGANGAN RENDAH (TR) BARA', 'Paket A', 1000, 0])
+  const activitySheet = workbook.addWorksheet('DATABASE KEGIATAN')
+  activitySheet.addRow(['PRK', 'SATUAN', 'KOMPONEN PEKERJAAN', 'KEGIATAN'])
+  activitySheet.addRow(['LAN-62.SAR-PENYAMBUNGAN BARU TEGANGAN RENDAH (TR) BARA', 'unit', 'Pekerjaan sambungan baru', 'Penyambungan pelanggan'])
+  const buffer = await workbook.xlsx.writeBuffer()
+  const result = await importWorkbook({
+    arrayBuffer: async () => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+  })
+
+  assert.equal(result.activityCatalog[0].prk, 'LAN-62.SAR-PENYAMBUNGAN BARU TEGANGAN RENDAH (TR) BARA')
+  assert.equal(result.activityCatalog[0].workPackage, 'Penyambungan pelanggan')
+  assert.equal(result.activityCatalog[0].name, 'Pekerjaan sambungan baru')
+  assert.equal(result.activityCatalog[0].unit, 'unit')
 })
 
 test('imports thousands-separated financial values without converting them to zero', async () => {
@@ -189,8 +384,8 @@ test('transfers PA against the matching row ID and rejects overspending', async 
     }
   }
 
-  const headers = ['NO.PRK', 'NO.RAB', 'URAIAN', 'TOTAL AKHIR', 'TOTAL RAB', 'TOTAL PA', 'NILAI KONTRAK', 'SISA PRK', 'RECORD ID', 'PROGRAM', 'TAHUN ANGGARAN', 'KETERANGAN']
-  const dataSheet = new MockSheet([headers, ['PRK-1', 'RAB-42', 'Paket A', 1500, 1000, 200, 200, 300, '', 'SAR', 2026, 'MURNI']])
+  const headers = ['NO.PRK', 'NO.RAB', 'URAIAN', 'TOTAL AKHIR', 'TOTAL RAB', 'TOTAL PA', 'NOKONTRAK', 'VENDOR', 'NILAI KONTRAK', 'SISA PRK', 'RECORD ID', 'PROGRAM', 'TAHUN ANGGARAN', 'KETERANGAN', 'TANGGAL AWAL', 'TANGGAL AKHIR']
+  const dataSheet = new MockSheet([headers, ['PRK-1', 'RAB-42', 'Paket A', 1500, 1000, 200, '', '', 200, 300, '', 'SAR', 2026, 'MURNI', '', '']])
   const sheets = { RABData: dataSheet }
   const spreadsheet = {
     getSheetByName: (name) => sheets[name] || null,
@@ -296,6 +491,34 @@ test('transfers PA against the matching row ID and rejects overspending', async 
   assert.equal(dataValue('NILAI KONTRAK'), 200)
   assert.equal(dataValue('SISA PRK'), 300)
   assert.equal(sheets.PA_TRANSFERS.values.length, 1)
+
+  const contractPreservingTransfer = post({
+    action: 'transferToPA', recordId: 'row-2', amount: 100, preserveContractValue: true,
+    notes: 'FINALIZED_RAB_GROUP::test-group',
+  })
+  assert.equal(contractPreservingTransfer.ok, true, contractPreservingTransfer.error)
+  assert.equal(contractPreservingTransfer.record.rabTotal, 900)
+  assert.equal(contractPreservingTransfer.record.paTotal, 300)
+  assert.equal(contractPreservingTransfer.record.contractValue, 200)
+  assert.equal(dataValue('NILAI KONTRAK'), 200)
+  const canceledContractTransfer = post({ action: 'cancelTransferToPA', transferId: contractPreservingTransfer.transfer.id })
+  assert.equal(canceledContractTransfer.ok, true, canceledContractTransfer.error)
+  assert.equal(canceledContractTransfer.record.rabTotal, 1000)
+  assert.equal(canceledContractTransfer.record.paTotal, 200)
+  assert.equal(canceledContractTransfer.record.contractValue, 200)
+
+  const finalizableTransfer = post({
+    action: 'transferToPA', recordId: 'row-2', amount: 100, preserveContractValue: true,
+    notes: 'FINALIZED_RAB_GROUP::contract-guard-test',
+  })
+  assert.equal(finalizableTransfer.ok, true, finalizableTransfer.error)
+  dataSheet.values[1][headers.indexOf('NOKONTRAK')] = 'KONTRAK-2026-01'
+  dataSheet.values[1][headers.indexOf('VENDOR')] = 'Vendor Test'
+  dataSheet.values[1][headers.indexOf('TANGGAL AWAL')] = '2026-10-25'
+  const blockedAfterContractEntry = post({ action: 'cancelTransferToPA', transferId: finalizableTransfer.transfer.id })
+  assert.equal(blockedAfterContractEntry.ok, false)
+  assert.match(blockedAfterContractEntry.error, /Data kontrak sudah diisi/)
+  assert.equal(sheets.PA_TRANSFERS.values.length, 2)
 })
 
 test('preserves physical row IDs when loading data around blank sheet rows', async () => {

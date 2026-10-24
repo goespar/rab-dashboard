@@ -164,17 +164,20 @@ export async function importWorkbook(file) {
     const headers = row.map(normalizedHeader)
     return headers.includes('KEGIATAN') && headers.includes('KOMPONENPEKERJAAN') && headers.includes('SATUAN') && headers.includes('PRK')
   }) : -1
+  const activityHeaders = activityHeaderIndex < 0 ? [] : activitySheet.rows[activityHeaderIndex].map(normalizedHeader)
+  const activityCell = (row, header) => row[activityHeaders.indexOf(header)]
   const activityCatalog = activityHeaderIndex < 0 ? [] : activitySheet.rows.slice(activityHeaderIndex + 1)
     .map((row, index) => {
-      const name = String(row[1] ?? '').trim()
+      const name = String(activityCell(row, 'KOMPONENPEKERJAAN') ?? '').trim()
+      const prk = String(activityCell(row, 'PRK') ?? '').trim()
       const matchedMaterial = materials.find((material) => material.componentActivity.toLowerCase() === name.toLowerCase())
       return {
-        id: `activity-${normalizedHeader(row[3])}-${normalizedHeader(name)}-${index + 1}`,
-        workPackage: String(row[0] ?? '').trim(),
+        id: `activity-${normalizedHeader(prk)}-${normalizedHeader(name)}-${index + 1}`,
+        workPackage: String(activityCell(row, 'KEGIATAN') ?? '').trim(),
         name,
         activity: name,
-        unit: String(row[2] ?? '').trim(),
-        prk: String(row[3] ?? '').trim(),
+        unit: String(activityCell(row, 'SATUAN') ?? '').trim(),
+        prk,
         criteria: matchedMaterial?.criteria || 'TR',
         importedFrom: activitySheet.name,
         sourceSheet: activitySheet.name,
