@@ -106,12 +106,23 @@
 .workflow-form-panel { scroll-margin-top: 76px; }
 .workflow-page.is-read-only .workflow-form-panel { display: none; }
 .workflow-page.is-read-only .workflow-layout { grid-template-columns: 1fr; }
-.workflow-component-table table { min-width: 1050px; }
+.workflow-component-table > table { min-width: 680px; }
 .workflow-component-table th[colspan] { text-align: center; }
 .workflow-component-description { min-width: 220px; overflow-wrap: anywhere; white-space: normal !important; }
 .workflow-component-description strong, .workflow-component-description small { display: block; }
 .workflow-component-description strong { color: #30415a; font-size: 12px; }
 .workflow-component-description small { margin-top: 3px; color: #738098; font-size: 11px; }
+.workflow-component-expand { display: flex; align-items: center; gap: 8px; padding: 0; border: 0; color: inherit; background: transparent; text-align: left; }
+.workflow-component-expand > svg { flex: none; color: #0878b9; transition: transform .18s ease; }
+.workflow-component-expand > svg.is-expanded { transform: rotate(180deg); }
+.workflow-component-expand > span { min-width: 0; }
+.workflow-component-expand strong { margin: 0; }
+.workflow-component-details { overflow-x: auto; padding: 8px; border-left: 3px solid #20bdd5; background: #f7fafc; }
+.workflow-component-details table { width: 100%; min-width: 950px; border-collapse: collapse; }
+.workflow-component-details th { background: #edf4f8; }
+.workflow-component-details td { background: #fff; }
+.workflow-component-details tfoot { background: #edf4f8; font-weight: 700; }
+.workflow-component-details tfoot td { border-top: 1px solid #dce4ee; color: #30435f; font-weight: 700; }
 .workflow-table-scroll thead { background: #f4f7fb; }
 .workflow-table-scroll th { height: auto; min-height: 33px; overflow: hidden; padding: 4px 8px; border-top: 1px solid #ebeff5; border-bottom: 1px solid #e6ecf3; color: #708099; font-size: 8px; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; text-overflow: ellipsis; white-space: normal; }
 .workflow-table-scroll td { height: 39px; padding: 7px 10px; border-bottom: 1px solid #edf1f6; color: #4b5c75; font-size: 9px; white-space: nowrap; }

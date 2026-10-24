@@ -61,6 +61,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
   const [saving, setSaving] = useState(false)
   const [saveStatus, setSaveStatus] = useState(null)
   const [editingId, setEditingId] = useState('')
+  const [expandedComponentGroup, setExpandedComponentGroup] = useState('')
   const formPanelRef = useRef(null)
 
   const componentFilterSourceRows = [
@@ -88,6 +89,23 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
     if (!search) return false
     return criteriaFilter === 'all' || row.criteria === criteriaFilter
   })
+  const componentDisplayGroups = view === 'components'
+    ? [...rows.reduce((groups, row) => {
+      const title = String(row.activity || row.componentName || row.name || row.materialName || '').trim()
+      const key = JSON.stringify([
+        String(row.prk || '').trim(),
+        normalizeWorkName(row.workPackage),
+        normalizeWorkName(title),
+        normalizeCriteria(row.criteria),
+      ])
+      const group = groups.get(key) || { key, title, prk: row.prk || '', workPackage: row.workPackage || '', criteria: row.criteria || '', rows: [] }
+      group.rows.push(row)
+      groups.set(key, group)
+      return groups
+    }, new Map()).values()]
+      .filter((group) => !searchTerm || `${group.title} ${group.prk} ${group.workPackage} ${group.criteria} ${group.rows.map((row) => Object.values(row).join(' ')).join(' ')}`
+        .toLowerCase().includes(searchTerm.toLowerCase()))
+    : []
 
   const selectedActivity = activities.find((activity) => activity.id === form.activityId)
   const selectedProgramRecord = programRecords.find((record) => record.id === form.recordId)
@@ -943,11 +961,34 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
       return <tr key={row.id}><td>{activity?.criteria || '-'}</td><td>{activity?.prk || '-'}</td><td>{activity?.name || '-'}</td><td>{row.date}</td><td>{row.volume}</td><td>{formatCurrency(row.billed)}</td><td>{formatCurrency(row.paid)}</td>{rowActions(row, 'realisasi')}</tr>
     })
     if (view === 'components') {
-      return filteredRows.map((row, index) => {
-      const materialPart = number(row.materialPart ?? number(row.quantityPerUnit) * number(row.materialPrice))
-      const servicePart = number(row.servicePart ?? number(row.quantityPerUnit) * number(row.servicePrice))
-      const totalPart = number(row.totalPart ?? materialPart + servicePart)
-      return <tr key={row.id}><td>{index + 1}</td><td className="workflow-component-description"><strong>{row.materialName || row.name}</strong></td><td>{row.quantityPerUnit}</td><td>{row.unit || '-'}</td><td>{formatCurrency(row.materialPrice)}</td><td>{formatCurrency(row.servicePrice)}</td><td>{formatCurrency(materialPart)}</td><td>{formatCurrency(servicePart)}</td><td className="workflow-total">{formatCurrency(totalPart)}</td>{rowActions(row, 'komponen RAB')}</tr>
+      return componentDisplayGroups.flatMap((group, index) => {
+        const isExpanded = expandedComponentGroup === group.key
+        const materialPart = group.rows.reduce((sum, row) => sum + number(row.materialPart ?? number(row.quantityPerUnit) * number(row.materialPrice)), 0)
+        const servicePart = group.rows.reduce((sum, row) => sum + number(row.servicePart ?? number(row.quantityPerUnit) * number(row.servicePrice)), 0)
+        const totalPart = group.rows.reduce((sum, row) => sum + number(row.totalPart ?? number(row.materialPart ?? number(row.quantityPerUnit) * number(row.materialPrice)) + number(row.servicePart ?? number(row.quantityPerUnit) * number(row.servicePrice))), 0)
+        return [
+          <tr key={group.key}>
+            <td>{index + 1}</td>
+            <td className="workflow-component-description">
+              <button className="workflow-component-expand" type="button" aria-expanded={isExpanded} onClick={() => setExpandedComponentGroup((current) => current === group.key ? '' : group.key)}>
+                <ChevronDown className={isExpanded ? 'is-expanded' : ''} size={15} />
+                <span><strong>{group.title || 'Komponen tanpa judul'}</strong>{(group.prk || group.workPackage) && <small>{[group.prk && `PRK ${group.prk}`, group.workPackage].filter(Boolean).join(' | ')}</small>}</span>
+              </button>
+            </td>
+            <td>{group.rows.length} material</td>
+            <td className="workflow-total">{formatCurrency(totalPart)}</td>
+          </tr>,
+          ...(isExpanded ? [<tr className="workflow-component-detail-row" key={`${group.key}-details`}><td colSpan="4"><div className="workflow-component-details">
+            <table><thead><tr><th>No</th><th>Uraian Material</th><th>Volume</th><th>Satuan</th><th>Harga satuan material</th><th>Harga satuan jasa</th><th>Bagian material</th><th>Bagian jasa</th><th>Jumlah (Rp)</th><th className="workflow-actions-heading">Aksi</th></tr></thead>
+              <tbody>{group.rows.map((row, rowIndex) => {
+                const lineMaterial = number(row.materialPart ?? number(row.quantityPerUnit) * number(row.materialPrice))
+                const lineService = number(row.servicePart ?? number(row.quantityPerUnit) * number(row.servicePrice))
+                return <tr key={row.id}><td>{rowIndex + 1}</td><td>{row.materialName || row.name || '-'}</td><td>{number(row.quantityPerUnit)}</td><td>{row.unit || '-'}</td><td>{formatCurrency(row.materialPrice)}</td><td>{formatCurrency(row.servicePrice)}</td><td>{formatCurrency(lineMaterial)}</td><td>{formatCurrency(lineService)}</td><td className="workflow-total">{formatCurrency(number(row.totalPart ?? lineMaterial + lineService))}</td>{rowActions(row, 'komponen RAB')}</tr>
+              })}</tbody>
+              <tfoot><tr><td colSpan="6">Jumlah</td><td>{formatCurrency(materialPart)}</td><td>{formatCurrency(servicePart)}</td><td className="workflow-total">{formatCurrency(totalPart)}</td><td /></tr></tfoot>
+            </table>
+          </div></td></tr>] : []),
+        ]
       })
     }
     return filteredRows.map((row) => <tr key={row.id}><td>{row.code || '-'}</td><td>{row.name}</td><td>{row.criteria}</td><td>{row.unit}</td><td>{row.source || '-'}</td><td>{formatCurrency(row.materialPrice)}</td><td>{formatCurrency(row.servicePrice ?? (number(row.installPrice) + number(row.removalPrice)))}</td>{rowActions(row, 'material')}</tr>)
@@ -962,14 +1003,15 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
     materialRecap: ['Kriteria', 'No. PRK', 'Kegiatan', 'Material', 'Kebutuhan RAB', 'Terpakai aktual', 'Sisa/selisih'],
     realizations: ['Kriteria', 'No. PRK', 'Kegiatan', 'Tanggal', 'Volume', 'Tagihan', 'Dibayar', ''],
   }[view]
-  const componentTotals = filteredRows.reduce((sum, row) => {
-    const materialPart = number(row.materialPart ?? number(row.quantityPerUnit) * number(row.materialPrice))
-    const servicePart = number(row.servicePart ?? number(row.quantityPerUnit) * number(row.servicePrice))
-    return {
-      materialPart: sum.materialPart + materialPart,
-      servicePart: sum.servicePart + servicePart,
-      total: sum.total + number(row.totalPart ?? materialPart + servicePart),
-    }
+  const componentTotals = componentDisplayGroups.reduce((sum, group) => {
+    group.rows.forEach((row) => {
+      const materialPart = number(row.materialPart ?? number(row.quantityPerUnit) * number(row.materialPrice))
+      const servicePart = number(row.servicePart ?? number(row.quantityPerUnit) * number(row.servicePrice))
+      sum.materialPart += materialPart
+      sum.servicePart += servicePart
+      sum.total += number(row.totalPart ?? materialPart + servicePart)
+    })
+    return sum
   }, { materialPart: 0, servicePart: 0, total: 0 })
   const activityTableTotals = view === 'activities'
     ? form.workPackage && activityPrkComponents.length
@@ -1148,7 +1190,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
 
     {(view === 'components' || view === 'activities') && <section className="workflow-rab-total-panel panel" aria-label={`Total ${meta.title}`}>
       <span className="workflow-summary-icon"><Icon size={19} /></span>
-      <div className="workflow-rab-total-count"><span>Baris {meta.title.toLowerCase()}</span><strong>{view === 'activities' ? activityDisplayRows.length : filteredRows.length}</strong></div>
+      <div className="workflow-rab-total-count"><span>{view === 'components' ? 'Komponen pekerjaan' : `Baris ${meta.title.toLowerCase()}`}</span><strong>{view === 'activities' ? activityDisplayRows.length : view === 'components' ? componentDisplayGroups.length : filteredRows.length}</strong></div>
       {view === 'activities' && <>
         <div><span>Subtotal</span><strong>{formatCurrency(activityTableTotals.total)}</strong></div>
         <div><span>DPP (11/12)</span><strong>{formatCurrency(activityDpp)}</strong></div>
@@ -1161,10 +1203,10 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
     <section className="panel workflow-table-panel">
       <div className="workflow-table-heading"><div><p className="eyebrow">DATA TERSIMPAN</p><h2>{view === 'materialRecap' ? 'Rencana dan pemakaian material' : meta.title}</h2></div>{(view === 'components' || view === 'activities') ? <div className="workflow-print-controls"><select aria-label={view === 'activities' ? 'Pilih kegiatan untuk dicetak' : 'Pilih komponen pekerjaan untuk dicetak'} value={printGroupKey} onChange={(event) => setPrintGroupKey(event.target.value)}><option value="">{view === 'activities' ? 'Pilih kegiatan' : 'Pilih komponen pekerjaan'}</option>{printGroups.map((group) => <option key={group.key} value={group.key}>{group.criteria ? `${group.criteria} | ` : ''}{group.activity}{group.prk ? ` | PRK ${group.prk}` : ''}</option>)}</select><button className="button button-secondary" type="button" disabled={!printableComponents.length} onClick={() => window.print()}><Printer size={15} /> Cetak RAB</button></div> : <span className="workflow-count">{view === 'materialRecap' ? plannedMaterialRows.length : rows.length} baris</span>}</div>
       <div className="workflow-toolbar"><label className="workflow-search"><Search size={15} /><input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Cari uraian, PRK, atau kegiatan" /></label>{view !== 'components' && <div className="workflow-segment" role="group" aria-label="Filter kriteria"><button className={criteriaFilter === 'all' ? 'selected' : ''} onClick={() => setCriteriaFilter('all')}>Semua</button><button className={criteriaFilter === 'TM' ? 'selected' : ''} onClick={() => setCriteriaFilter('TM')}>TM</button><button className={criteriaFilter === 'TR' ? 'selected' : ''} onClick={() => setCriteriaFilter('TR')}>TR</button></div>}</div>
-      <div className={`workflow-table-scroll ${view === 'components' || view === 'activities' ? 'workflow-component-table' : ''} ${view === 'materials' ? 'workflow-materials-freeze-scroll' : ''} ${view === 'activityCatalog' ? 'workflow-catalog-freeze-scroll' : ''}`}><table><thead>{view === 'components' ? <><tr><th rowSpan="2">No</th><th rowSpan="2">Uraian Material</th><th rowSpan="2">Volume</th><th rowSpan="2">Satuan</th><th colSpan="2">Harga satuan (Rp)</th><th colSpan="2">Bagian (Rp)</th><th rowSpan="2">Jumlah (Rp)</th><th className="workflow-actions-heading" rowSpan="2">Aksi</th></tr><tr><th>Material</th><th>Jasa</th><th>Material</th><th>Jasa</th></tr></> : <tr>{tableHeaders.map((header, index) => <th className={!header || header === 'Aksi' ? 'workflow-actions-heading' : undefined} key={`${header}-${index}`}>{header || <span className="sr-only">Aksi</span>}</th>)}</tr>}</thead><tbody>
+      <div className={`workflow-table-scroll ${view === 'components' || view === 'activities' ? 'workflow-component-table' : ''} ${view === 'materials' ? 'workflow-materials-freeze-scroll' : ''} ${view === 'activityCatalog' ? 'workflow-catalog-freeze-scroll' : ''}`}><table><thead>{view === 'components' ? <tr>{['No', 'Komponen Pekerjaan', 'Uraian', 'Jumlah (Rp)'].map((header) => <th key={header}>{header}</th>)}</tr> : <tr>{tableHeaders.map((header, index) => <th className={!header || header === 'Aksi' ? 'workflow-actions-heading' : undefined} key={`${header}-${index}`}>{header || <span className="sr-only">Aksi</span>}</th>)}</tr>}</thead><tbody>
         {view === 'materialRecap' ? tableRows() : tableRows()}
-        {((view === 'materialRecap' && filteredMaterialRows.length === 0) || (view === 'activities' && activityDisplayRows.length === 0) || (view !== 'materialRecap' && view !== 'activities' && filteredRows.length === 0)) && <tr><td colSpan={tableHeaders.length}><div className="workflow-empty"><Icon size={23} /><strong>Belum ada data</strong><span>Gunakan formulir di atas untuk memulai alur ini.</span></div></td></tr>}
-      </tbody>{view === 'components' && filteredRows.length > 0 && <tfoot className="workflow-summary-footer"><tr><td colSpan="6">Jumlah</td><td>{formatCurrency(componentTotals.materialPart)}</td><td>{formatCurrency(componentTotals.servicePart)}</td><td className="workflow-total">{formatCurrency(componentTotals.total)}</td><td /></tr></tfoot>}{view === 'activities' && activityDisplayRows.length > 0 && <tfoot className="workflow-summary-footer"><tr><td colSpan="2">Jumlah</td><td>{formatCurrency(activityTableTotals.material)}</td><td>{formatCurrency(activityTableTotals.service)}</td><td className="workflow-total">{formatCurrency(activityTableTotals.total)}</td><td /></tr></tfoot>}</table></div>
+        {((view === 'materialRecap' && filteredMaterialRows.length === 0) || (view === 'activities' && activityDisplayRows.length === 0) || (view === 'components' && componentDisplayGroups.length === 0) || (view !== 'components' && view !== 'materialRecap' && view !== 'activities' && filteredRows.length === 0)) && <tr><td colSpan={view === 'components' ? 4 : tableHeaders.length}><div className="workflow-empty"><Icon size={23} /><strong>Belum ada data</strong><span>Gunakan formulir di atas untuk memulai alur ini.</span></div></td></tr>}
+      </tbody>{view === 'components' && componentDisplayGroups.length > 0 && <tfoot className="workflow-summary-footer"><tr><td colSpan="3">Jumlah</td><td className="workflow-total">{formatCurrency(componentTotals.total)}</td></tr></tfoot>}{view === 'activities' && activityDisplayRows.length > 0 && <tfoot className="workflow-summary-footer"><tr><td colSpan="2">Jumlah</td><td>{formatCurrency(activityTableTotals.material)}</td><td>{formatCurrency(activityTableTotals.service)}</td><td className="workflow-total">{formatCurrency(activityTableTotals.total)}</td><td /></tr></tfoot>}</table></div>
       {view === 'activities' && activityDisplayRows.length > 0 && <div className="workflow-tax-summary"><div><span>DPP (11/12)</span><strong>{formatCurrency(activityDpp)}</strong></div><div><span>PPN 12%</span><strong>{formatCurrency(activityPpn)}</strong></div><div className="workflow-tax-total"><span>TOTAL ANGGARAN</span><strong>{formatCurrency(activityTotalAnggaran)}</strong></div></div>}
     </section>
     {view === 'materialRecap' && <section className="panel workflow-table-panel">
