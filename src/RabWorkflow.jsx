@@ -8,8 +8,8 @@ import './workflow.css'
 const VIEW_META = {
   materials: { title: 'Input Material', description: 'Master material dan harga yang menjadi sumber komponen RAB.', icon: Boxes, collection: 'materials' },
   activityCatalog: { title: 'Master Kegiatan', description: 'Kelola paket, nama, satuan, kriteria, dan PRK untuk acuan komponen RAB.', icon: ClipboardList, collection: 'activityCatalog' },
-  components: { title: 'Input RAB Komponen', description: 'Susun kebutuhan material dan jasa per kegiatan, dipisah TM dan TR.', icon: Wrench, collection: 'components' },
-  activities: { title: 'Input RAB Kegiatan', description: 'Hitung RAB kegiatan berdasarkan volume dan komponen pekerjaan.', icon: ClipboardList, collection: 'activities' },
+  components: { title: 'Input RAB', description: 'Susun kebutuhan material dan jasa per kegiatan, dipisah TM dan TR.', icon: Wrench, collection: 'components' },
+  activities: { title: 'Rekap RAB', description: 'Hitung RAB kegiatan berdasarkan volume dan komponen pekerjaan.', icon: ClipboardList, collection: 'activities' },
   paFinalization: { title: 'Finalisasi RAB ke PA', description: 'Alihkan sebagian saldo RAB yang sudah final ke PA. Saldo PA dan nilai kontrak dicatat terpisah.', icon: ArrowRightLeft, collection: 'paTransfers' },
   materialRecap: { title: 'Rekap Material', description: 'Bandingkan kebutuhan material dari RAB dengan pemakaian aktual.', icon: Boxes, collection: 'materialRecap' },
   realizations: { title: 'Realisasi', description: 'Catat progres volume, tagihan, dan pembayaran kegiatan.', icon: Activity, collection: 'realizations' },
