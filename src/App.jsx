@@ -23,10 +23,8 @@ const SESSION_KEY = 'rab-monitor-session-v1'
 const YEAR_OPTIONS = ['2024', '2025', '2026', '2027', '2028', '2029', '2030']
 const EMPTY_COLLECTIONS = { materials: [], activityCatalog: [], components: [], activities: [], paTransfers: [], materialRecap: [], realizations: [] }
 const WORKFLOW_NAV = [
-  { id: 'materials', label: 'Input Material', icon: Boxes, section: 'PERENCANAAN RAB' },
-  { id: 'activityCatalog', label: 'Master Kegiatan', icon: ClipboardList },
-  { id: 'components', label: 'RAB Komponen', icon: Wrench },
-  { id: 'activities', label: 'RAB Kegiatan', icon: ClipboardList },
+  { id: 'components', label: 'RAB', icon: Wrench, section: 'PERENCANAAN RAB' },
+  { id: 'activities', label: 'Rekap RAB', icon: ClipboardList },
   { id: 'paFinalization', collection: 'paTransfers', label: 'Finalisasi ke PA', icon: ArrowDownToLine },
   { id: 'contracts', label: 'Data Kontrak', icon: FileText },
   { id: 'realizations', label: 'Realisasi', icon: Activity },
@@ -157,6 +155,7 @@ function App() {
   const [notice, setNotice] = useState('')
   const [logoutPending, setLogoutPending] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(() => Boolean(readSession()?.token))
+  const [managementOpen, setManagementOpen] = useState(false)
   const [publicUpdatedAt, setPublicUpdatedAt] = useState(() => publicCache?.updatedAt || null)
   const [publicLoading, setPublicLoading] = useState(true)
   const [publicError, setPublicError] = useState('')
@@ -661,8 +660,8 @@ function App() {
   }
 
   const pageTitle = {
-    overview: 'Dashboard', data: 'Rekap RAB', materials: 'Input Material', activityCatalog: 'Master Kegiatan', components: 'RAB Komponen',
-    activities: 'RAB Kegiatan', paFinalization: 'Finalisasi ke PA', contracts: 'Data Kontrak', users: 'Manajemen User', materialRecap: 'Rekap Material', realizations: 'Realisasi',
+    overview: 'Dashboard', data: 'Detail AI', materials: 'Input Material', activityCatalog: 'Master Kegiatan', components: 'RAB',
+    activities: 'Rekap RAB', paFinalization: 'Finalisasi ke PA', contracts: 'Data Kontrak', users: 'Manajemen User', materialRecap: 'Rekap Material', realizations: 'Realisasi',
   }[activeView] || 'Dashboard'
   const canEdit = Boolean(auth && auth.user.role !== 'viewer' && authDataReady && !authDataLoading)
   const isAdmin = auth?.user.role === 'admin'
@@ -688,8 +687,17 @@ function App() {
               <button className={activeView === item.id ? 'nav-item active' : 'nav-item'} onClick={() => setActiveView(item.id)}><Icon size={18} /><span>{item.label}</span><span className="nav-count">{item.id === 'contracts' ? contractRecords.length : workflowCollections[item.collection || item.id]?.length || 0}</span></button>
             </div>
           })}
-          {auth && <button className={activeView === 'data' ? 'nav-item active' : 'nav-item'} onClick={() => setActiveView('data')}><FolderKanban size={18} /><span>Rekap RAB</span><span className="nav-count">{records.length}</span></button>}
-          {isAdmin && <button className={activeView === 'users' ? 'nav-item active' : 'nav-item'} onClick={() => setActiveView('users')}><Users size={18} /><span>Manajemen User</span></button>}
+          {auth && <button className={activeView === 'data' ? 'nav-item active' : 'nav-item'} onClick={() => setActiveView('data')}><FolderKanban size={18} /><span>Detail AI</span><span className="nav-count">{records.length}</span></button>}
+          {auth && <div className="nav-management">
+            <button className={`nav-item${['materials', 'activityCatalog', 'users'].includes(activeView) ? ' active' : ''}`} aria-expanded={managementOpen} onClick={() => setManagementOpen((open) => !open)}>
+              <Settings2 size={18} /><span>Manajemen</span><ChevronDown className={`nav-chevron${managementOpen ? ' is-open' : ''}`} size={15} />
+            </button>
+            {managementOpen && <div className="nav-submenu">
+              <button className={activeView === 'materials' ? 'nav-item nav-subitem active' : 'nav-item nav-subitem'} onClick={() => setActiveView('materials')}><Boxes size={16} /><span>Input Material</span></button>
+              <button className={activeView === 'activityCatalog' ? 'nav-item nav-subitem active' : 'nav-item nav-subitem'} onClick={() => setActiveView('activityCatalog')}><ClipboardList size={16} /><span>Master Kegiatan</span></button>
+              {isAdmin && <button className={activeView === 'users' ? 'nav-item nav-subitem active' : 'nav-item nav-subitem'} onClick={() => setActiveView('users')}><Users size={16} /><span>Manajemen User</span></button>}
+            </div>}
+          </div>}
         </nav>
         <div className="sidebar-spacer" />
         <div className="sidebar-note"><div className="note-icon"><ShieldCheck size={16} /></div><div><strong>Monitoring RAB</strong><span>Rekap anggaran dan realisasi</span></div></div>

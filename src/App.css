@@ -12,6 +12,13 @@
 .nav-item.active { color: #f7f8f4; background: #2b5140; box-shadow: inset 3px 0 #d9ef84; }
 .nav-item.active svg { color: #d9ef84; }
 .nav-count { margin-left: auto; color: #a6b9aa; font-size: 10px; }
+.nav-management { display: grid; gap: 3px; }
+.nav-chevron { margin-left: auto; transition: transform .18s ease; }
+.nav-chevron.is-open { transform: rotate(180deg); }
+.nav-submenu { display: grid; gap: 2px; padding-left: 13px; }
+.nav-item.nav-subitem { height: 37px; padding-left: 12px; font-size: 11px; }
+.nav-item.nav-subitem svg { color: #a6b9aa; }
+.nav-item.nav-subitem.active svg { color: #d9ef84; }
 .sidebar-spacer { flex: 1; }
 .sidebar-note { display: flex; gap: 10px; padding: 12px 9px 15px; border-bottom: 1px solid rgba(255,255,255,.11); }
 .note-icon { display: grid; flex: none; width: 28px; height: 28px; place-items: center; border-radius: 6px; color: #d9ef84; background: rgba(217,239,132,.12); }
