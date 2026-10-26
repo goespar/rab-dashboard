@@ -56,6 +56,12 @@ Workflow memakai tab terpisah yang dibuat otomatis oleh Apps Script: `RAB_MATERI
 
 Setiap tab workflow menyimpan nilai dalam kolom terpisah agar mudah dibaca dan difilter di Google Sheets. Setelah memperbarui dan men-deploy Apps Script, pemuatan workflow pertama akan mengonversi baris lama berformat `DATA_JSON` menjadi kolom tanpa membuang datanya.
 
+## Penyimpanan Monitoring
+
+Menu Monitoring membaca dan menyimpan data terpusat di spreadsheet yang sama dengan `SPREADSHEET_ID`. Setelah perubahan `apps-script/Code.gs` di-deploy sebagai versi baru, tab Monitoring dibuat otomatis ketika data pertama kali disimpan: `MON_SPB`, `MON_STOCK_GUDANG`, `MON_BEBAN`, `MON_DATABASE_RAB`, `MON_TIBET`, `MON_KONTRAK_VENDOR`, dan `MON_KEBUTUHAN_PELANGGAN`. Tidak perlu membuat tab tersebut secara manual.
+
+Impor workbook Monitoring menyimpan ketujuh dataset ke tab masing-masing. Tambah kontrak, tambah kebutuhan pelanggan, dan simpan material RAB juga langsung memperbarui Google Sheets. Jika data lama masih hanya ada di localStorage browser, gunakan tombol **Simpan data browser ke Google Sheets** yang tampil saat tab Monitoring di Google Sheets belum berisi data. Pemuatan ulang menu selanjutnya membaca data dari spreadsheet.
+
 Setelah RAB kegiatan disepakati, **Finalisasi RAB ke PA** meminta konfirmasi, menolak transfer di atas saldo RAB, mengurangi `TOTAL RAB`, menambah `TOTAL PA`, dan mengisi `NILAI KONTRAK` dengan saldo PA terbaru. Nomor kontrak dan vendor pemenang dilengkapi melalui menu **Data Kontrak**; nilai kontrak dapat diedit di sana. Pembatalan transfer mengembalikan saldo RAB, PA, dan nilai kontrak ke posisi sebelumnya. Setiap transfer dicatat di `PA_TRANSFERS` dengan saldo sebelum/sesudah.
 
 Realisasi volume, tagihan, dan pembayaran tersimpan di tab `REALISASI`. Total tagihan dan pembayaran dari seluruh entri kegiatan pada PRK yang sama otomatis dijumlahkan ke kolom `TAGIHAN` dan `TOTAL BAYAR` di `RABData`, serta diperbarui kembali ketika entri realisasi diedit atau dihapus. Aplikasi tidak menjalankan proses tender atau menerbitkan kontrak.

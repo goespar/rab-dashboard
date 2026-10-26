@@ -1114,3 +1114,61 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
   assert.equal(loggedOut.ok, true)
   assert.equal(sheets.SESSIONS.values.some((row) => row[0] === createHash('sha256').update(admin.token).digest('hex')), false)
 })
+
+test('saves Monitoring datasets to protected dedicated Google Sheets tabs', async () => {
+  class MockSheet {
+    constructor(values = []) { this.values = values }
+    getDataRange() { return { getValues: () => this.values.map((row) => [...row]) } }
+    getLastRow() { return this.values.length }
+    getLastColumn() { return Math.max(0, ...this.values.map((row) => row.length)) }
+    clearContents() { this.values = [] }
+    getRange(row, column) {
+      return {
+        setValues: (rows) => rows.forEach((values, rowIndex) => {
+          this.values[row - 1 + rowIndex] ??= []
+          values.forEach((value, columnIndex) => {
+            this.values[row - 1 + rowIndex][column - 1 + columnIndex] = value
+          })
+        }),
+      }
+    }
+  }
+
+  const sheets = {}
+  const spreadsheet = {
+    getSheetByName: (name) => sheets[name] || null,
+    insertSheet: (name) => { sheets[name] = new MockSheet(); return sheets[name] },
+  }
+  const context = {
+    SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet, openById: () => spreadsheet },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: () => '' }) },
+    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    ContentService: {
+      MimeType: { JSON: 'application/json' },
+      createTextOutput: (text) => ({ text, setMimeType() { return this } }),
+    },
+  }
+  const script = await readFile(new URL('../apps-script/Code.gs', import.meta.url), 'utf8')
+  vm.runInNewContext(script, context)
+  context.authorize_ = () => ({ ok: true, user: { id: 'test-admin', role: 'admin' } })
+  const post = (payload) => JSON.parse(context.doPost({ postData: { contents: JSON.stringify(payload) } }).text)
+  const datasets = {
+    vendor: { headers: ['NOMOR KONTRAK', 'STATUS KONTRAK'], rows: [['K-1', 'OPEN']] },
+    rabDatabase: { headers: ['ID RAB', 'URAIAN MATERIAL'], rows: [['R-1', '=IMPORTXML("url")']] },
+  }
+  const saved = post({ action: 'saveMonitoring', datasets })
+  assert.equal(saved.ok, true, saved.error)
+  assert.deepEqual(saved.sheetNames, ['MON_KONTRAK_VENDOR', 'MON_DATABASE_RAB'])
+  assert.equal(sheets.MON_KONTRAK_VENDOR.values[1][0], 'K-1')
+  assert.equal(sheets.MON_DATABASE_RAB.values[1][1], '\'=IMPORTXML("url")')
+
+  const loaded = JSON.parse(context.doGet({ parameter: { action: 'loadMonitoring', token: 'test' } }).text)
+  assert.equal(loaded.ok, true)
+  assert.equal(loaded.datasets.vendor.rows[0][0], 'K-1')
+  assert.equal(loaded.datasets.rabDatabase.rows[0][1], '\'=IMPORTXML("url")')
+
+  context.authorize_ = () => ({ ok: true, user: { id: 'test-viewer', role: 'viewer' } })
+  const denied = post({ action: 'saveMonitoring', datasets })
+  assert.equal(denied.ok, false)
+  assert.match(denied.error, /viewer/)
+})
