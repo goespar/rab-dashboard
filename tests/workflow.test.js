@@ -6,10 +6,28 @@ import test from 'node:test'
 import vm from 'node:vm'
 import ExcelJS from 'exceljs'
 import appsScriptHandler from '../api/apps-script.js'
-import { importWorkbook, parseNumber } from '../src/lib/workbook.js'
+import { HEADERS, importWorkbook, MONTHLY_BILLING_COLUMNS, parseNumber } from '../src/lib/workbook.js'
 import { applyFinalizedPaBalances, summarizePublicDashboard } from '../src/lib/publicDashboard.js'
 import { findProgramRecordForRabGroup } from '../src/lib/rabReferences.js'
 import { calculateRabTotalsByProgramRecord } from '../src/lib/rabTotals.js'
+import { accumulateProjectedBilling, getBillingForDate, getPlannedBilling } from '../src/lib/contractBilling.js'
+
+test('accumulates each new monthly projection with the existing total', () => {
+  assert.equal(accumulateProjectedBilling(900000, 500000), 1400000)
+  assert.equal(accumulateProjectedBilling(900000, ''), 900000)
+  assert.equal(accumulateProjectedBilling('', 500000), 500000)
+})
+
+test('gets realization date and amount from the contract billing month', () => {
+  const record = {
+    plannedBilling: '2026-10-12',
+    billingOctober: 10000000,
+    billingNovember: 10000000,
+  }
+  assert.deepEqual(getPlannedBilling(record), { date: '2026-10-12', amount: 10000000 })
+  assert.deepEqual(getBillingForDate(record, '2026-10-29'), { date: '2026-10-29', amount: 10000000 })
+  assert.deepEqual(getBillingForDate(record, '2026-11-05'), { date: '2026-11-05', amount: 10000000 })
+})
 
 test('finds the source budget row by normalized PRK or fixed PRK reference', () => {
   const sourceRecord = { id: 'budget-1', prk: 'OTHER-PRK', prkFix: 'MRN-62.SAR-01', rabTotal: 5000 }
@@ -203,6 +221,152 @@ test('imports No. RAB-only rows with distinct sheet row IDs', async () => {
   assert.equal(result.records[0].rabNumber, 'RAB-42')
 })
 
+test('adds monthly billing columns after RENCANA TAGIH and maps scheduled values to their month', async () => {
+  const script = await readFile(new URL('../apps-script/Code.gs', import.meta.url), 'utf8')
+  const context = {}
+  vm.runInNewContext(script, context)
+
+  class MockSheet {
+    constructor(values) { this.values = values }
+    getDataRange() { return { getValues: () => this.values.map((row) => [...row]) } }
+    getMaxRows() { return 1000 }
+    insertColumnsAfter(position, count) {
+      this.values.forEach((row) => row.splice(position, 0, ...Array(count).fill('')))
+    }
+    getRange(row, column) {
+      return {
+        setNumberFormat: (format) => { this.lastNumberFormat = { row, column, format }; return this },
+        setValues: (rows) => rows.forEach((values, rowIndex) => {
+          this.values[row - 1 + rowIndex] ??= []
+          values.forEach((value, columnIndex) => {
+            this.values[row - 1 + rowIndex][column - 1 + columnIndex] = value
+          })
+        }),
+      }
+    }
+  }
+
+  const monthlyHeaders = MONTHLY_BILLING_COLUMNS.map(([header]) => header)
+  const legacyHeaders = HEADERS.filter((header) => !monthlyHeaders.includes(header))
+  legacyHeaders.splice(legacyHeaders.indexOf('TANGGAL AWAL'), 0, 'RECORD ID')
+  const october = Array(legacyHeaders.length).fill('')
+  october[legacyHeaders.indexOf('RENCANA TAGIH')] = '2026-10-12'
+  october[legacyHeaders.indexOf('PROYEKSI TAGIH')] = 999000
+  const november = Array(legacyHeaders.length).fill('')
+  november[legacyHeaders.indexOf('RENCANA TAGIH')] = '2026-11-05'
+  november[legacyHeaders.indexOf('PROYEKSI TAGIH')] = 888000
+  const sheet = new MockSheet([legacyHeaders, october, november])
+
+  context.ensureDataHeaders_(sheet)
+  const headers = sheet.values[0]
+  const plannedBillingIndex = headers.indexOf('RENCANA TAGIH')
+  assert.deepEqual(
+    headers.slice(plannedBillingIndex + 1, plannedBillingIndex + 1 + monthlyHeaders.length),
+    monthlyHeaders,
+  )
+  assert.equal(headers[plannedBillingIndex + monthlyHeaders.length + 1], 'PROGRESS')
+  assert.equal(sheet.lastNumberFormat.column, plannedBillingIndex + 2)
+  assert.equal(sheet.lastNumberFormat.format, '#,##0')
+
+  const workbookHeaders = HEADERS
+  const workbookPlannedBillingIndex = workbookHeaders.indexOf('RENCANA TAGIH')
+  assert.deepEqual(
+    workbookHeaders.slice(workbookPlannedBillingIndex + 1, workbookPlannedBillingIndex + 1 + monthlyHeaders.length),
+    monthlyHeaders,
+  )
+  assert.equal(context.monthlyBillingValues_({
+    plannedBilling: '2026-10-12', billingAmount: 125000, projectedBilling: 999000,
+  }).billingOctober, 125000)
+  assert.equal(context.monthlyBillingValues_({
+    plannedBilling: '2026-11-05', billingAmount: 250000, projectedBilling: 888000,
+  }).billingNovember, 250000)
+  const novemberValues = context.monthlyBillingValues_({
+    plannedBilling: '2026-11-05',
+    billingAmount: 5000000,
+    billingOctober: 10000000,
+  })
+  assert.equal(novemberValues.billingOctober, 10000000)
+  assert.equal(novemberValues.billingNovember, 5000000)
+  assert.equal(context.sumMonthlyBilling_(novemberValues), 15000000)
+
+  const clientRecord = context.toClientRecord_({
+    'RECORD ID': 'contract-1',
+    'NILAI KONTRAK': 20000000,
+    'TAGIHAN OKTOBER': 10000000,
+    'TAGIHAN NOPEMBER': 5000000,
+    'TOTAL AKHIR': 30000000,
+    'TOTAL RAB': 20000000,
+  })
+  assert.equal(clientRecord.id, 'contract-1')
+  assert.equal(clientRecord.billingOctober, 10000000)
+  assert.equal(clientRecord.billingNovember, 5000000)
+})
+
+test('preserves monthly invoices, sums billing, and keeps projection independent', async () => {
+  class MockSheet {
+    constructor(values = []) { this.values = values }
+    getDataRange() { return { getValues: () => this.values.map((row) => [...row]) } }
+    getMaxRows() { return 1000 }
+    clearContents() { this.values = [] }
+    getRange(row, column) {
+      return {
+        setNumberFormat: () => this,
+        setValues: (rows) => rows.forEach((values, rowIndex) => {
+          this.values[row - 1 + rowIndex] ??= []
+          values.forEach((value, columnIndex) => {
+            this.values[row - 1 + rowIndex][column - 1 + columnIndex] = value
+          })
+        }),
+      }
+    }
+  }
+
+  const dataHeaders = [...HEADERS]
+  dataHeaders.splice(dataHeaders.indexOf('TANGGAL AWAL'), 0, 'RECORD ID')
+  const dataSheet = new MockSheet([dataHeaders])
+  const spreadsheet = {
+    getSheetByName: (name) => name === 'RABData' ? dataSheet : null,
+    insertSheet: () => dataSheet,
+  }
+  const context = {
+    SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: () => '' }) },
+    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    ContentService: {
+      MimeType: { JSON: 'application/json' },
+      createTextOutput: (text) => ({ text, setMimeType() { return this } }),
+    },
+  }
+  const script = await readFile(new URL('../apps-script/Code.gs', import.meta.url), 'utf8')
+  vm.runInNewContext(script, context)
+  context.authorize_ = () => ({ ok: true, user: { id: 'test-admin', role: 'admin' } })
+  const post = (payload) => JSON.parse(context.doPost({ postData: { contents: JSON.stringify(payload) } }).text)
+  const save = (record) => post({ action: 'save', records: [record] })
+  const record = {
+    id: 'billing-row',
+    prk: 'PRK-1',
+    paid: 3000000,
+    plannedBilling: '2026-10-12',
+    billingAmount: 10000000,
+    projectedBilling: 900000,
+  }
+
+  assert.equal(save(record).ok, true)
+  const novemberRecord = {
+    ...record,
+    plannedBilling: '2026-11-05',
+    billingAmount: 5000000,
+  }
+  assert.equal(save(novemberRecord).ok, true)
+
+  const row = dataSheet.values[1]
+  assert.equal(row[dataHeaders.indexOf('TAGIHAN OKTOBER')], 10000000)
+  assert.equal(row[dataHeaders.indexOf('TAGIHAN NOPEMBER')], 5000000)
+  assert.equal(row[dataHeaders.indexOf('TAGIHAN')], 15000000)
+  assert.equal(row[dataHeaders.indexOf('PROYEKSI TAGIH')], 900000)
+  assert.equal(row[dataHeaders.indexOf('TOTAL BAYAR')], 3000000)
+})
+
 test('imports activity PRKs using their column headers rather than fixed positions', async () => {
   const workbook = new ExcelJS.Workbook()
   const budgetSheet = workbook.addWorksheet('DATA ANGGARAN INVESTASI')
@@ -360,12 +524,15 @@ test('transfers PA against the matching row ID and rejects overspending', async 
       return this.values.length
     }
 
+    getMaxRows() { return 1000 }
+
     clearContents() {
       this.values = []
     }
 
     getRange(row, column) {
       return {
+        setNumberFormat: () => { this.numberFormatColumn = column; return this },
         setValue: (value) => { this.values[row - 1][column - 1] = value },
         setValues: (rows) => rows.forEach((values, rowIndex) => {
           this.values[row - 1 + rowIndex] ??= []
@@ -525,8 +692,10 @@ test('preserves physical row IDs when loading data around blank sheet rows', asy
   class MockSheet {
     constructor(values) { this.values = values }
     getDataRange() { return { getValues: () => this.values.map((row) => [...row]) } }
+    getMaxRows() { return 1000 }
     getRange(row, column) {
       return {
+        setNumberFormat: () => this,
         setValues: (rows) => rows.forEach((values, rowIndex) => {
           this.values[row - 1 + rowIndex] ??= []
           values.forEach((value, columnIndex) => { this.values[row - 1 + rowIndex][column - 1 + columnIndex] = value })
@@ -566,9 +735,14 @@ test('syncs realization billing and payment totals to matching RABData rows', as
     constructor(values = []) { this.values = values }
     getDataRange() { return { getValues: () => this.values.map((row) => [...row]) } }
     getLastRow() { return this.values.length }
+    getMaxRows() { return 1000 }
+    insertColumnsAfter(position, count) {
+      this.values.forEach((row) => row.splice(position, 0, ...Array(count).fill('')))
+    }
     clearContents() { this.values = [] }
     getRange(row, column) {
       return {
+        setNumberFormat: () => this,
         setValue: (value) => {
           this.values[row - 1] ??= []
           this.values[row - 1][column - 1] = value
@@ -581,8 +755,8 @@ test('syncs realization billing and payment totals to matching RABData rows', as
     }
   }
 
-  const dataHeaders = ['NO.PRK', 'NO.RAB', 'URAIAN', 'TOTAL RAB', 'TOTAL PA', 'NILAI KONTRAK', 'TAGIHAN', 'TOTAL BAYAR', 'RECORD ID']
-  const dataSheet = new MockSheet([dataHeaders, ['PRK-1', 'RAB-1', 'Paket A', 1000, 0, 0, 50, 25, 'record-1']])
+  const dataHeaders = ['NO.PRK', 'NO.RAB', 'URAIAN', 'TOTAL RAB', 'TOTAL PA', 'NILAI KONTRAK', 'TAGIHAN', 'TOTAL BAYAR', 'PROGRESS', 'TANGGAL BAYAR', 'RECORD ID']
+  const dataSheet = new MockSheet([dataHeaders, ['PRK-1', 'RAB-1', 'Paket A', 1000, 0, 500, 50, 25, '', '', 'record-1']])
   const activitySheet = new MockSheet([
     ['ID', 'No. RAB', 'ID Data PRK', 'No. PRK'],
     ['activity-1', 'RAB-1', 'record-1', 'PRK-1'],
@@ -605,24 +779,39 @@ test('syncs realization billing and payment totals to matching RABData rows', as
   vm.runInNewContext(script, context)
   context.authorize_ = () => ({ ok: true, user: { id: 'test-admin', username: 'admin', role: 'admin', name: 'Test Admin' } })
   const post = (payload) => JSON.parse(context.doPost({ postData: { contents: JSON.stringify(payload) } }).text)
-  const realization = (id, billed, paid) => ({ id, activityId: 'activity-1', date: '2026-09-27', volume: 1, billed, paid })
+  const realization = (id, date, billed, paid, paymentStatus, programRecordId = '') => ({
+    id, activityId: programRecordId ? 'input-rab:activity-1' : 'activity-1', programRecordId, date, billed, paid, paymentStatus,
+  })
 
-  const saved = post({ action: 'saveWorkflow', collection: 'realizations', records: [realization('real-1', 100, 40), realization('real-2', 200, 80)] })
+  const saved = post({ action: 'saveWorkflow', collection: 'realizations', records: [
+    realization('real-1', '2026-09-27', 100, 40, 'BELUM LUNAS'),
+    realization('real-2', '2026-09-28', 200, 80, 'LUNAS', 'record-1'),
+  ] })
   assert.equal(saved.ok, true, saved.error)
   assert.equal(dataSheet.values[1][dataHeaders.indexOf('TAGIHAN')], 300)
   assert.equal(dataSheet.values[1][dataHeaders.indexOf('TOTAL BAYAR')], 120)
+  assert.equal(dataSheet.values[1][dataHeaders.indexOf('PROGRESS')], 'LUNAS')
+  assert.equal(dataSheet.values[1][dataHeaders.indexOf('TANGGAL BAYAR')], '2026-09-28')
   assert.equal(saved.updatedRecords[0].billed, 300)
   assert.equal(saved.updatedRecords[0].paid, 120)
+  assert.equal(saved.updatedRecords[0].progress, 'LUNAS')
+  assert.equal(saved.updatedRecords[0].paymentDate, '2026-09-28')
 
-  const edited = post({ action: 'saveWorkflow', collection: 'realizations', records: [realization('real-2', 250, 100)] })
+  const edited = post({ action: 'saveWorkflow', collection: 'realizations', records: [
+    realization('real-2', '2026-09-28', 250, 100, 'BELUM LUNAS', 'record-1'),
+  ] })
   assert.equal(edited.ok, true, edited.error)
   assert.equal(dataSheet.values[1][dataHeaders.indexOf('TAGIHAN')], 250)
   assert.equal(dataSheet.values[1][dataHeaders.indexOf('TOTAL BAYAR')], 100)
+  assert.equal(dataSheet.values[1][dataHeaders.indexOf('PROGRESS')], 'BELUM LUNAS')
+  assert.equal(dataSheet.values[1][dataHeaders.indexOf('TANGGAL BAYAR')], '2026-09-28')
 
   const deleted = post({ action: 'saveWorkflow', collection: 'realizations', records: [] })
   assert.equal(deleted.ok, true, deleted.error)
   assert.equal(dataSheet.values[1][dataHeaders.indexOf('TAGIHAN')], 0)
   assert.equal(dataSheet.values[1][dataHeaders.indexOf('TOTAL BAYAR')], 0)
+  assert.equal(dataSheet.values[1][dataHeaders.indexOf('PROGRESS')], '')
+  assert.equal(dataSheet.values[1][dataHeaders.indexOf('TANGGAL BAYAR')], '')
 })
 
 test('loads and migrates workflow JSON into named columns without losing records', async () => {
@@ -630,8 +819,9 @@ test('loads and migrates workflow JSON into named columns without losing records
     constructor(values = []) { this.values = values }
     getDataRange() { return { getValues: () => this.values.map((row) => [...row]) } }
     getLastRow() { return this.values.length }
+    getMaxRows() { return 1000 }
     clearContents() { this.values = [] }
-    getRange(row, column) {
+    getRange(row) {
       return { setValues: (rows) => rows.forEach((values, index) => { this.values[row - 1 + index] = values }) }
     }
   }
@@ -754,9 +944,14 @@ test('bootstraps admin, exposes only aggregate public data, and blocks viewer wr
     constructor(values = []) { this.values = values }
     getDataRange() { return { getValues: () => this.values.map((row) => [...row]) } }
     getLastRow() { return this.values.length }
+    getMaxRows() { return 1000 }
+    insertColumnsAfter(position, count) {
+      this.values.forEach((row) => row.splice(position, 0, ...Array(count).fill('')))
+    }
     clearContents() { this.values = [] }
     getRange(row, column, numRows = 1, numColumns = 1) {
       const range = {
+        setNumberFormat: () => range,
         getValue: () => this.values[row - 1]?.[column - 1] ?? '',
         getValues: () => Array.from({ length: numRows }, (_, rowIndex) =>
           Array.from({ length: numColumns }, (_, columnIndex) => this.values[row - 1 + rowIndex]?.[column - 1 + columnIndex] ?? ''),
