@@ -261,10 +261,10 @@ test('imports schedule columns AA-AG and keeps blank AI totals empty', async () 
   ])
   sheet.addRow([
     'PRK-1', 'Paket A', 1000, 100, 200, 600, 150, 50, 'MURNI',
-    new Date(2026, 0, 15), new Date(2026, 5, 30), 700, 150, 'BELUM LUNAS', 500, new Date(2026, 6, 1),
+    new Date(2026, 0, 15), new Date(2026, 5, 30), new Date(2026, 6, 20), new Date(2026, 7, 15), 'BELUM LUNAS', 500, new Date(2026, 6, 1),
   ])
   sheet.addRow(['PRK-1', 'Detail paket', '', 0, 0, 0, 0, 0, 'MURNI'])
-  for (const address of ['J2', 'K2', 'P2']) sheet.getCell(address).numFmt = 'dd/mm/yyyy'
+  for (const address of ['J2', 'K2', 'L2', 'M2', 'P2']) sheet.getCell(address).numFmt = 'dd/mm/yyyy'
   const buffer = await workbook.xlsx.writeBuffer()
   const result = await importWorkbook({
     arrayBuffer: async () => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
@@ -272,8 +272,8 @@ test('imports schedule columns AA-AG and keeps blank AI totals empty', async () 
 
   assert.equal(result.records[0].startDate, '2026-01-15')
   assert.equal(result.records[0].endDate, '2026-06-30')
-  assert.equal(result.records[0].plannedContract, 700)
-  assert.equal(result.records[0].plannedBilling, 150)
+  assert.equal(result.records[0].plannedContract, '2026-07-20')
+  assert.equal(result.records[0].plannedBilling, '2026-08-15')
   assert.equal(result.records[0].progress, 'BELUM LUNAS')
   assert.equal(result.records[0].projectedBilling, 500)
   assert.equal(result.records[0].paymentDate, '2026-07-01')

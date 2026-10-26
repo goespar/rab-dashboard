@@ -20,8 +20,8 @@ const COLUMN_KEYS = {
   PROGRESS: 'progress', 'PROYEKSI TAGIH': 'projectedBilling', 'TANGGAL BAYAR': 'paymentDate',
 }
 
-const NUMERIC_KEYS = new Set(['totalPrk', 'relocation', 'skkiRevision', 'totalFinal', 'rabTotal', 'paTotal', 'contractValue', 'paReturn', 'costReplacement', 'billed', 'paid', 'prkRemaining', 'plannedContract', 'plannedBilling', 'projectedBilling', 'year'])
-const DATE_KEYS = new Set(['startDate', 'endDate', 'paymentDate'])
+const NUMERIC_KEYS = new Set(['totalPrk', 'relocation', 'skkiRevision', 'totalFinal', 'rabTotal', 'paTotal', 'contractValue', 'paReturn', 'costReplacement', 'billed', 'paid', 'prkRemaining', 'projectedBilling', 'year'])
+const DATE_KEYS = new Set(['startDate', 'endDate', 'plannedContract', 'plannedBilling', 'paymentDate'])
 
 function normalizeDate(value) {
   if (value instanceof Date) {
