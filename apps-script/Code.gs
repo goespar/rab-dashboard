@@ -60,16 +60,27 @@ const WORKFLOW_COLUMNS = {
     ['PA Sebelum (Rp)', 'paBefore'], ['PA Sesudah (Rp)', 'paAfter'], ['Nilai Kontrak (Rp)', 'contractValue'], ['Catatan', 'notes'],
   ],
   realizations: [
-    ['ID', 'id'], ['ID Kegiatan', 'activityId'], ['Tanggal', 'date'], ['Volume Terealisasi', 'volume'], ['Tagihan (Rp)', 'billed'],
-    ['Dibayar (Rp)', 'paid'], ['Kriteria', 'criteria'], ['No. PRK', 'prk'], ['Nama Kegiatan', 'activityName'], ['Catatan', 'notes'],
+    ['ID', 'id'], ['ID Kegiatan', 'activityId'], ['ID Data PRK', 'programRecordId'], ['Tanggal Tagihan', 'date'], ['Tagihan (Rp)', 'billed'],
+    ['Dibayar (Rp)', 'paid'], ['Status Pembayaran', 'paymentStatus'], ['Kriteria', 'criteria'],
+    ['No. PRK', 'prk'], ['Nama Kegiatan', 'activityName'], ['Catatan', 'notes'],
   ],
 }
+const MONTHLY_BILLING_COLUMNS = [
+  ['TAGIHAN JANUARI', 'billingJanuary'], ['TAGIHAN PEBRUARI', 'billingFebruary'],
+  ['TAGIHAN MARET', 'billingMarch'], ['TAGIHAN APRIL', 'billingApril'],
+  ['TAGIHAN MEI', 'billingMay'], ['TAGIHAN JUNI', 'billingJune'],
+  ['TAGIHAN JULI', 'billingJuly'], ['TAGIHAN AGUSTUS', 'billingAugust'],
+  ['TAGIHAN SEPTEMBER', 'billingSeptember'], ['TAGIHAN OKTOBER', 'billingOctober'],
+  ['TAGIHAN NOPEMBER', 'billingNovember'], ['TAGIHAN DESEMBER', 'billingDecember'],
+]
 const DATA_HEADERS = [
   'NO.PRK', 'NO.PRK SKKI', 'NO.PRK FIX', 'NO.WBS', 'POS ANGGARAN', 'NO.RAB', 'NO.PA',
   'URAIAN', 'TOTAL PRK', 'RELOKASI', 'REVISI SKKI', 'TOTAL AKHIR', 'TOTAL RAB', 'TOTAL PA',
   'NOKONTRAK', 'VENDOR', 'NILAI KONTRAK', 'PENGEMBALIAN PA', 'PENGGANTIAN BIAYA', 'TAGIHAN',
   'TOTAL BAYAR', 'SISA PRK', 'PROGRAM', 'TAHUN ANGGARAN', 'KETERANGAN', 'POS ANGGARAN', 'RECORD ID',
-  'TANGGAL AWAL', 'TANGGAL AKHIR', 'RENCANA KONTRAK', 'RENCANA TAGIH', 'PROGRESS', 'PROYEKSI TAGIH', 'TANGGAL BAYAR',
+  'TANGGAL AWAL', 'TANGGAL AKHIR', 'RENCANA KONTRAK', 'RENCANA TAGIH',
+  ...MONTHLY_BILLING_COLUMNS.map(([header]) => header),
+  'PROGRESS', 'PROYEKSI TAGIH', 'TANGGAL BAYAR',
 ]
 
 const CLIENT_KEYS = {
@@ -85,6 +96,7 @@ const CLIENT_KEYS = {
   'RENCANA KONTRAK': 'plannedContract', 'RENCANA TAGIH': 'plannedBilling',
   'PROGRESS': 'progress', 'PROYEKSI TAGIH': 'projectedBilling', 'TANGGAL BAYAR': 'paymentDate',
 }
+MONTHLY_BILLING_COLUMNS.forEach(([header, key]) => { CLIENT_KEYS[header] = key })
 
 function doGet(event) {
   const action = event && event.parameter && event.parameter.action
@@ -163,14 +175,38 @@ function doPost(event) {
   lock.waitLock(10000)
   try {
     const sheet = getDataSheet_()
+    const existingValues = sheet.getDataRange().getValues()
+    const existingHeaders = existingValues[0] || []
+    const existingRecords = new Map()
+    existingValues.slice(1).forEach((row, index) => {
+      if (!row.some((cell) => cell !== '' && cell !== null)) return
+      const source = { sourceRow: index + 2 }
+      existingHeaders.forEach((header, column) => { source[header] = row[column] })
+      const existingRecord = toClientRecord_(source)
+      existingRecords.set(String(existingRecord.id), existingRecord)
+    })
     const rows = payload.records.map((record) => {
-      const current = { ...record }
+      const existing = existingRecords.get(String(record.id)) || {}
+      const current = { ...existing, ...record }
+      MONTHLY_BILLING_COLUMNS.forEach(([, key]) => {
+        if ((record[key] === '' || record[key] === null || record[key] === undefined)
+          && existing[key] !== '' && existing[key] !== null && existing[key] !== undefined) {
+          current[key] = existing[key]
+        }
+      })
       current.prkRemaining = calculatePrkRemaining_(current)
+      const monthlyValues = monthlyBillingValues_(current)
+      Object.assign(current, monthlyValues)
+      if (MONTHLY_BILLING_COLUMNS.some(([, key]) => monthlyValues[key] !== '' && monthlyValues[key] !== null)) {
+        const monthlyTotal = sumMonthlyBilling_(monthlyValues)
+        current.billed = monthlyTotal
+      }
       return DATA_HEADERS.map((header) => current[CLIENT_KEYS[header]] ?? '')
     })
     sheet.clearContents()
     sheet.getRange(1, 1, 1, DATA_HEADERS.length).setValues([DATA_HEADERS])
     if (rows.length) sheet.getRange(2, 1, rows.length, DATA_HEADERS.length).setValues(rows)
+    formatMonthlyBillingColumns_(sheet, DATA_HEADERS)
     clearPublicDashboardCache_()
     return json_({ ok: true, rows: rows.length, updatedAt: new Date().toISOString() })
   } finally {
@@ -192,14 +228,43 @@ function ensureDataHeaders_(sheet) {
   const values = sheet.getDataRange().getValues()
   if (!values.length) {
     sheet.getRange(1, 1, 1, DATA_HEADERS.length).setValues([DATA_HEADERS])
+    formatMonthlyBillingColumns_(sheet, DATA_HEADERS)
     return
   }
-  const headers = values[0] || []
+  let headers = values[0] || []
   const existingHeaders = new Set(headers.map((header) => String(header || '').trim()).filter(Boolean))
+  const monthlyHeaders = MONTHLY_BILLING_COLUMNS.map(([header]) => header)
+  const missingMonthlyHeaders = monthlyHeaders.filter((header) => !existingHeaders.has(header))
+  const plannedBillingIndex = headers.findIndex((header) => String(header || '').trim() === 'RENCANA TAGIH')
+  if (missingMonthlyHeaders.length && plannedBillingIndex >= 0) {
+    sheet.insertColumnsAfter(plannedBillingIndex + 1, missingMonthlyHeaders.length)
+    sheet.getRange(1, plannedBillingIndex + 2, 1, missingMonthlyHeaders.length).setValues([missingMonthlyHeaders])
+    missingMonthlyHeaders.forEach((header) => existingHeaders.add(header))
+    headers = sheet.getDataRange().getValues()[0] || []
+  }
   const missingHeaders = DATA_HEADERS.filter((header) => !existingHeaders.has(header))
-  if (!missingHeaders.length) return
-  const lastHeaderColumn = headers.reduce((last, header, index) => String(header || '').trim() ? index + 1 : last, 0)
-  sheet.getRange(1, lastHeaderColumn + 1, 1, missingHeaders.length).setValues([missingHeaders])
+  if (missingHeaders.length) {
+    const lastHeaderColumn = headers.reduce((last, header, index) => String(header || '').trim() ? index + 1 : last, 0)
+    sheet.getRange(1, lastHeaderColumn + 1, 1, missingHeaders.length).setValues([missingHeaders])
+  }
+  formatMonthlyBillingColumns_(sheet, sheet.getDataRange().getValues()[0] || [])
+}
+
+function formatMonthlyBillingColumns_(sheet, headers) {
+  const columnIndexes = MONTHLY_BILLING_COLUMNS.map(([header]) => headers.indexOf(header))
+  if (columnIndexes.some((index) => index < 0)) {
+    throw new Error('Kolom tagihan bulanan tidak lengkap di RABData.')
+  }
+  const firstColumn = Math.min(...columnIndexes)
+  const sequential = columnIndexes.every((index, offset) => index === firstColumn + offset)
+  const rowCount = Math.max(sheet.getMaxRows() - 1, 1)
+  if (sequential) {
+    sheet.getRange(2, firstColumn + 1, rowCount, MONTHLY_BILLING_COLUMNS.length).setNumberFormat('#,##0')
+    return
+  }
+  columnIndexes.forEach((columnIndex) => {
+    sheet.getRange(2, columnIndex + 1, rowCount, 1).setNumberFormat('#,##0')
+  })
 }
 
 function toClientRecord_(row) {
@@ -208,6 +273,38 @@ function toClientRecord_(row) {
   result.id = result.id || `row-${row.sourceRow}`
   result.prkRemaining = calculatePrkRemaining_(result)
   return result
+}
+
+function monthlyBillingValues_(record) {
+  const values = MONTHLY_BILLING_COLUMNS.reduce((result, [, key]) => {
+    result[key] = record[key] ?? ''
+    return result
+  }, {})
+  const plannedBilling = record.plannedBilling
+  let month = -1
+  if (plannedBilling instanceof Date && Number.isFinite(plannedBilling.getTime())) {
+    month = plannedBilling.getMonth()
+  } else {
+    const dateMatch = String(plannedBilling || '').match(/^\d{4}-(\d{2})-\d{2}/)
+    if (dateMatch) month = Number(dateMatch[1]) - 1
+  }
+  const key = MONTHLY_BILLING_COLUMNS[month]?.[1]
+  const hasNewAmount = Object.prototype.hasOwnProperty.call(record, 'billingAmount')
+    && record.billingAmount !== ''
+    && record.billingAmount !== null
+    && record.billingAmount !== undefined
+  const amount = Number(hasNewAmount ? record.billingAmount : values[key])
+  if (month >= 0 && month < MONTHLY_BILLING_COLUMNS.length && hasNewAmount && Number.isFinite(amount)) {
+    values[key] = amount
+  }
+  return values
+}
+
+function sumMonthlyBilling_(values) {
+  return MONTHLY_BILLING_COLUMNS.reduce((total, [, key]) => {
+    const amount = Number(values[key])
+    return total + (Number.isFinite(amount) ? amount : 0)
+  }, 0)
 }
 
 function calculatePrkRemaining_(record) {
@@ -733,7 +830,11 @@ function syncRealizationTotals_(previousRecords, nextRecords) {
   const headers = values.shift() || []
   const billedIndex = headers.indexOf('TAGIHAN')
   const paidIndex = headers.indexOf('TOTAL BAYAR')
-  if (billedIndex < 0 || paidIndex < 0) throw new Error('Kolom TAGIHAN atau TOTAL BAYAR tidak ditemukan di RABData.')
+  const progressIndex = headers.indexOf('PROGRESS')
+  const paymentDateIndex = headers.indexOf('TANGGAL BAYAR')
+  if ([billedIndex, paidIndex, progressIndex, paymentDateIndex].some((index) => index < 0)) {
+    throw new Error('Kolom TAGIHAN, TOTAL BAYAR, PROGRESS, atau TANGGAL BAYAR tidak ditemukan di RABData.')
+  }
 
   const programRecords = values.map((row, index) => {
     const source = { sourceRow: index + 2 }
@@ -751,17 +852,29 @@ function syncRealizationTotals_(previousRecords, nextRecords) {
     if (linkedRecord) recordByActivity.set(String(activity.id), linkedRecord.id)
   })
 
+  const resolveRecordId = (item) => {
+    const linkedRecordId = String(item.programRecordId || '')
+    return linkedRecordId && programRecords.some((record) => String(record.id) === linkedRecordId)
+      ? linkedRecordId
+      : recordByActivity.get(String(item.activityId))
+  }
   const affectedRecordIds = new Set([...previousRecords, ...nextRecords]
-    .map((item) => recordByActivity.get(String(item.activityId)))
+    .map(resolveRecordId)
     .filter(Boolean).map(String))
   if (!affectedRecordIds.size) return []
 
-  const totals = new Map([...affectedRecordIds].map((id) => [id, { billed: 0, paid: 0 }]))
+  const totals = new Map([...affectedRecordIds].map((id) => [id, { billed: 0, paid: 0, latest: null }]))
   nextRecords.forEach((item) => {
-    const total = totals.get(String(recordByActivity.get(String(item.activityId)) || ''))
+    const total = totals.get(String(resolveRecordId(item) || ''))
     if (!total) return
     total.billed += Number(item.billed) || 0
     total.paid += Number(item.paid) || 0
+    const date = String(item.date || '')
+    const createdAt = String(item.createdAt || '')
+    if (date && (!total.latest || date > total.latest.date
+      || (date === total.latest.date && createdAt > total.latest.createdAt))) {
+      total.latest = { date, createdAt, status: String(item.paymentStatus || '') }
+    }
   })
 
   const updates = []
@@ -771,15 +884,27 @@ function syncRealizationTotals_(previousRecords, nextRecords) {
     const rowNumber = index + 2
     const previousBilled = values[index][billedIndex]
     const previousPaid = values[index][paidIndex]
+    const previousProgress = values[index][progressIndex]
+    const previousPaymentDate = values[index][paymentDateIndex]
     try {
       dataSheet.getRange(rowNumber, billedIndex + 1).setValue(total.billed)
       dataSheet.getRange(rowNumber, paidIndex + 1).setValue(total.paid)
+      dataSheet.getRange(rowNumber, progressIndex + 1).setValue(total.latest?.status || '')
+      dataSheet.getRange(rowNumber, paymentDateIndex + 1).setValue(total.latest?.date || '')
     } catch (error) {
       dataSheet.getRange(rowNumber, billedIndex + 1).setValue(previousBilled)
       dataSheet.getRange(rowNumber, paidIndex + 1).setValue(previousPaid)
+      dataSheet.getRange(rowNumber, progressIndex + 1).setValue(previousProgress)
+      dataSheet.getRange(rowNumber, paymentDateIndex + 1).setValue(previousPaymentDate)
       throw error
     }
-    updates.push({ ...record, billed: total.billed, paid: total.paid })
+    updates.push({
+      ...record,
+      billed: total.billed,
+      paid: total.paid,
+      progress: total.latest?.status || '',
+      paymentDate: total.latest?.date || '',
+    })
   })
   return updates
 }
