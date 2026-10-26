@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity, ArrowDownToLine, ArrowUpFromLine, BarChart3, Boxes, Check, ChevronDown,
-  CircleAlert, ClipboardList, Cloud, FileSpreadsheet, FolderKanban, LayoutDashboard, LoaderCircle,
+  CircleAlert, ClipboardList, Cloud, Database, FileSpreadsheet, FolderKanban, Gauge, LayoutDashboard, LoaderCircle,
   ArrowUpRight, FileText, LockKeyhole, LogIn, LogOut, MapPin, PanelLeftClose, PanelLeftOpen, Pencil, PhoneCall, Plus, Search, Settings2, ShieldCheck, Upload, Users, Wrench, X, Zap,
 } from 'lucide-react'
 import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
@@ -11,6 +11,7 @@ import { accumulateProjectedBilling, getPlannedBilling } from './lib/contractBil
 import { findProgramRecordForRabGroup } from './lib/rabReferences.js'
 import { calculateRabBudgetTotal, calculateRabTotalsByProgramRecord } from './lib/rabTotals.js'
 import RabWorkflow from './RabWorkflow.jsx'
+import Monitoring from './Monitoring.jsx'
 import danantaraLogo from '../logo/Danantara_Indonesia_(no_SW).svg.webp'
 import plnLogo from '../logo/Logo_PLN.png'
 import contactCenterLogo from '../logo/call center PLN 123.png'
@@ -28,6 +29,15 @@ const EMPTY_COLLECTIONS = { materials: [], activityCatalog: [], components: [], 
 const WORKFLOW_NAV = [
   { id: 'contracts', label: 'Data Kontrak', icon: FileText },
   { id: 'realizations', label: 'Realisasi', icon: Activity },
+]
+const MONITORING_NAV = [
+  { id: 'monitoring-spb', label: 'SPB', icon: FileSpreadsheet },
+  { id: 'monitoring-stock', label: 'Stock Gudang', icon: Boxes },
+  { id: 'monitoring-load', label: 'Monitoring Beban', icon: Gauge },
+  { id: 'monitoring-rabDatabase', label: 'Database RAB', icon: Database },
+  { id: 'monitoring-tibet', label: 'Mon Tibet', icon: Activity },
+  { id: 'monitoring-vendor', label: 'Mon Kontrak Vendor', icon: FileText },
+  { id: 'monitoring-customers', label: 'Mon Kebutuhan Pelanggan', icon: Users },
 ]
 
 const hasContractNumber = (record) => String(record.contractNumber ?? '').trim().length > 0
@@ -94,6 +104,20 @@ function apiPost(payload) {
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({ ...payload, ...(token && !payload.token ? { token } : {}) }),
   })
+}
+
+async function loadMonitoringFromSheets() {
+  const response = await apiGet('loadMonitoring')
+  const result = await response.json()
+  if (!response.ok || !result.ok) throw new Error(result.error || 'Data Monitoring gagal dimuat dari Google Sheets.')
+  return result.datasets || {}
+}
+
+async function saveMonitoringToSheets(datasets) {
+  const response = await apiPost({ action: 'saveMonitoring', datasets })
+  const result = await response.json()
+  if (!response.ok || !result.ok) throw new Error(result.error || 'Data Monitoring gagal disimpan ke Google Sheets.')
+  return result
 }
 
 function normalizeImportedMaterials(materials) {
@@ -179,6 +203,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(() => Boolean(readSession()?.token))
   const [rabMenuOpen, setRabMenuOpen] = useState(false)
   const [managementOpen, setManagementOpen] = useState(false)
+  const [monitoringOpen, setMonitoringOpen] = useState(false)
   const [publicUpdatedAt, setPublicUpdatedAt] = useState(() => publicCache?.updatedAt || null)
   const [publicLoading, setPublicLoading] = useState(true)
   const [publicError, setPublicError] = useState('')
@@ -816,9 +841,11 @@ function App() {
   const pageTitle = {
     overview: 'Dashboard', data: 'Detail AI', materials: 'Input Material', activityCatalog: 'Master Kegiatan', components: 'Input RAB',
     activities: 'Rekap RAB', paFinalization: 'Finalisasi ke PA', contracts: 'Data Kontrak', users: 'Manajemen User', materialRecap: 'Rekap Material', realizations: 'Realisasi',
+    ...Object.fromEntries(MONITORING_NAV.map((item) => [item.id, item.label])),
   }[activeView] || 'Dashboard'
   const canEdit = Boolean(auth && auth.user.role !== 'viewer' && authDataReady && !authDataLoading)
   const isAdmin = auth?.user.role === 'admin'
+  const isMonitoringView = activeView.startsWith('monitoring-')
   const dashboardRecordCount = auth
     ? dashboardRecords.length
     : dashboardRecords.reduce((sum, record) => sum + Number(record.publicCount || 0), 0)
@@ -852,6 +879,17 @@ function App() {
           })}
           {auth && <button className={activeView === 'data' ? 'nav-item active' : 'nav-item'} onClick={() => setActiveView('data')}><FolderKanban size={18} /><span>Detail AI</span><span className="nav-count">{records.length}</span></button>}
           {auth && <div className="nav-management">
+            <button className={`nav-item${activeView.startsWith('monitoring-') ? ' active' : ''}`} aria-expanded={monitoringOpen} onClick={() => setMonitoringOpen((open) => !open)}>
+              <Activity size={18} /><span>Monitoring</span><ChevronDown className={`nav-chevron${monitoringOpen ? ' is-open' : ''}`} size={15} />
+            </button>
+            {monitoringOpen && <div className="nav-submenu monitoring-nav-submenu">
+              {MONITORING_NAV.map((item) => {
+                const Icon = item.icon
+                return <button key={item.id} className={activeView === item.id ? 'nav-item nav-subitem monitoring-nav-subitem active' : 'nav-item nav-subitem monitoring-nav-subitem'} onClick={() => setActiveView(item.id)}><Icon size={15} /><span>{item.label}</span></button>
+              })}
+            </div>}
+          </div>}
+          {auth && <div className="nav-management">
             <button className={`nav-item${['materials', 'activityCatalog', 'users'].includes(activeView) ? ' active' : ''}`} aria-expanded={managementOpen} onClick={() => setManagementOpen((open) => !open)}>
               <Settings2 size={18} /><span>Manajemen</span><ChevronDown className={`nav-chevron${managementOpen ? ' is-open' : ''}`} size={15} />
             </button>
@@ -873,7 +911,7 @@ function App() {
           <button className="icon-button sidebar-toggle" aria-label={sidebarOpen ? 'Sembunyikan menu' : 'Tampilkan menu'} title={sidebarOpen ? 'Sembunyikan menu' : 'Tampilkan menu'} onClick={() => setSidebarOpen((open) => !open)}>{sidebarOpen ? <PanelLeftClose size={19} /> : <PanelLeftOpen size={19} />}</button>
           <div className="breadcrumb"><span>Monitoring PLN</span><span className="breadcrumb-slash">/</span><strong>{pageTitle}</strong></div>
           <div className="topbar-actions">
-            <div className={`sync-status ${connection === 'cloud' ? 'is-cloud' : ''}`} title={connection === 'cloud' ? 'Google Sheets tersambung' : 'Penyimpanan browser'}>{connection === 'cloud' ? <Cloud size={15} /> : <CircleAlert size={15} />}<span>{connection === 'cloud' ? 'Google Sheets' : 'Lokal'}</span></div>
+            <div className={`sync-status ${!isMonitoringView && connection === 'cloud' ? 'is-cloud' : ''}`} title={isMonitoringView ? 'Workbook Monitoring tersimpan di browser ini' : connection === 'cloud' ? 'Google Sheets tersambung' : 'Penyimpanan browser'}>{isMonitoringView ? <FileSpreadsheet size={15} /> : connection === 'cloud' ? <Cloud size={15} /> : <CircleAlert size={15} />}<span>{isMonitoringView ? 'Data lokal' : connection === 'cloud' ? 'Google Sheets' : 'Lokal'}</span></div>
             {auth ? <>
               <button className="button button-secondary export-button" onClick={downloadWorkbook}><ArrowDownToLine size={16} /><span>Ekspor</span></button>
               {canEdit && <button className="button button-primary" onClick={() => { setImportModal(true); setImportError(''); setPendingImport(null) }}><Plus size={17} /><span>Impor Excel</span></button>}
@@ -913,14 +951,14 @@ function App() {
             <section className="page-heading data-heading"><div><p className="eyebrow">PORTOFOLIO ANGGARAN</p><h1>Data anggaran</h1><p className="heading-subtitle">Kelola rekap RAB dan lengkapi nilai kontrak secara manual.</p></div>{canEdit && <button className="button button-primary" onClick={() => { setImportModal(true); setImportError(''); setPendingImport(null) }}><Upload size={16} /><span>Impor data</span></button>}</section>
             <ProjectTable records={filteredRecords} onEdit={canEdit ? setEditingRecord : undefined} onViewAll={() => setActiveView('data')} searchTerm={searchTerm} setSearchTerm={setSearchTerm} selectedYear={selectedYear} setSelectedYear={setSelectedYear} years={years} selectedProgram={selectedProgram} setSelectedProgram={setSelectedProgram} programs={programs} selectedNotesCategory={selectedNotesCategory} setSelectedNotesCategory={setSelectedNotesCategory} readOnly={!canEdit} />
             <div className="table-footnote"><ShieldCheck size={14} /> Aplikasi ini untuk rekap dan monitoring. Proses tender dan kontrak dilakukan di luar aplikasi.</div>
-          </> : activeView === 'contracts' && auth ? <>
+          </> : activeView.startsWith('monitoring-') && auth ? <Monitoring key={activeView} moduleId={activeView.slice('monitoring-'.length)} onNotice={setNotice} onLoadMonitoring={loadMonitoringFromSheets} onSaveMonitoring={saveMonitoringToSheets} readOnly={!canEdit} /> : activeView === 'contracts' && auth ? <>
             <section className="page-heading data-heading"><div><p className="eyebrow">ADMINISTRASI PENGADAAN</p><h1>Data Kontrak</h1><p className="heading-subtitle">Catat nomor kontrak, vendor pemenang, dan nilai kontrak aktual per PRK/RAB.</p></div></section>
             <div className="table-footnote contract-guidance"><ShieldCheck size={14} /> Nilai PA adalah alokasi/pagu. Nilai kontrak diisi sesuai kontrak pemenang dan tidak otomatis mengikuti saldo PA.</div>
             <ContractTable records={contractRecords} workflowCollections={workflowCollections} onEdit={canEdit ? setEditingRecord : undefined} readOnly={!canEdit} />
           </> : activeView === 'users' && isAdmin ? <UserManagement />
             : auth && activeView !== 'overview' ? <RabWorkflow key={activeView} view={activeView} collections={workflowCollections} programRecords={records} onSave={saveWorkflowCollection} onTransfer={transferToPA} onFinalizeRab={finalizeRabToPA} onCancelTransfer={cancelTransferFromPA} onEditRab={(record) => { setRabEditRecordId(record.id); setActiveView('components') }} editComponentId={rabEditRecordId} onEditComponentHandled={clearRabEditRecord} readOnly={!canEdit} />
               : null}
-          <footer className="page-footer"><span>PLN <span className="footer-separator">/</span> RAB &amp; Realisasi</span><span>Data tersimpan {connection === 'cloud' ? 'di Google Sheets' : 'di browser ini'}</span></footer>
+          <footer className="page-footer"><span>PLN <span className="footer-separator">/</span> RAB &amp; Realisasi</span><span>{isMonitoringView ? `Data Monitoring tersimpan ${connection === 'cloud' ? 'di Google Sheets' : 'di browser ini'}` : `Data tersimpan ${connection === 'cloud' ? 'di Google Sheets' : 'di browser ini'}`}</span></footer>
         </div>
       </main>
 
