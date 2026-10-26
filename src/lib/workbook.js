@@ -1,11 +1,22 @@
 import ExcelJS from 'exceljs'
 
+export const MONTHLY_BILLING_COLUMNS = [
+  ['TAGIHAN JANUARI', 'billingJanuary'], ['TAGIHAN PEBRUARI', 'billingFebruary'],
+  ['TAGIHAN MARET', 'billingMarch'], ['TAGIHAN APRIL', 'billingApril'],
+  ['TAGIHAN MEI', 'billingMay'], ['TAGIHAN JUNI', 'billingJune'],
+  ['TAGIHAN JULI', 'billingJuly'], ['TAGIHAN AGUSTUS', 'billingAugust'],
+  ['TAGIHAN SEPTEMBER', 'billingSeptember'], ['TAGIHAN OKTOBER', 'billingOctober'],
+  ['TAGIHAN NOPEMBER', 'billingNovember'], ['TAGIHAN DESEMBER', 'billingDecember'],
+]
+
 export const HEADERS = [
   'NO.PRK', 'NO.PRK SKKI', 'NO.PRK FIX', 'NO.WBS', 'POS ANGGARAN', 'NO.RAB', 'NO.PA',
   'URAIAN', 'TOTAL PRK', 'RELOKASI', 'REVISI SKKI', 'TOTAL AKHIR', 'TOTAL RAB', 'TOTAL PA',
   'NOKONTRAK', 'VENDOR', 'NILAI KONTRAK', 'PENGEMBALIAN PA', 'PENGGANTIAN BIAYA', 'TAGIHAN',
   'TOTAL BAYAR', 'SISA PRK', 'PROGRAM', 'TAHUN ANGGARAN', 'KETERANGAN', 'POS ANGGARAN',
-  'TANGGAL AWAL', 'TANGGAL AKHIR', 'RENCANA KONTRAK', 'RENCANA TAGIH', 'PROGRESS', 'PROYEKSI TAGIH', 'TANGGAL BAYAR',
+  'TANGGAL AWAL', 'TANGGAL AKHIR', 'RENCANA KONTRAK', 'RENCANA TAGIH',
+  ...MONTHLY_BILLING_COLUMNS.map(([header]) => header),
+  'PROGRESS', 'PROYEKSI TAGIH', 'TANGGAL BAYAR',
 ]
 
 const COLUMN_KEYS = {
@@ -19,8 +30,13 @@ const COLUMN_KEYS = {
   'TANGGAL AKHIR': 'endDate', 'RENCANA KONTRAK': 'plannedContract', 'RENCANA TAGIH': 'plannedBilling',
   PROGRESS: 'progress', 'PROYEKSI TAGIH': 'projectedBilling', 'TANGGAL BAYAR': 'paymentDate',
 }
+MONTHLY_BILLING_COLUMNS.forEach(([header, key]) => { COLUMN_KEYS[header] = key })
 
-const NUMERIC_KEYS = new Set(['totalPrk', 'relocation', 'skkiRevision', 'totalFinal', 'rabTotal', 'paTotal', 'contractValue', 'paReturn', 'costReplacement', 'billed', 'paid', 'prkRemaining', 'projectedBilling', 'year'])
+const NUMERIC_KEYS = new Set([
+  'totalPrk', 'relocation', 'skkiRevision', 'totalFinal', 'rabTotal', 'paTotal', 'contractValue', 'paReturn',
+  'costReplacement', 'billed', 'paid', 'prkRemaining', 'projectedBilling', 'year',
+  ...MONTHLY_BILLING_COLUMNS.map(([, key]) => key),
+])
 const DATE_KEYS = new Set(['startDate', 'endDate', 'plannedContract', 'plannedBilling', 'paymentDate'])
 
 function normalizeDate(value) {

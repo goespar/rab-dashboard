@@ -48,6 +48,7 @@
 .workflow-form-footer > span { color: #8995a7; font-size: 8px; }
 .workflow-form-footer .button { min-height: 33px; }
 .workflow-form-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 7px; }
+.workflow-save-status { display: flex; align-items: center; gap: 7px; margin: 0 0 12px; font-size: 10px; line-height: 1.45; }
 .workflow-form-footer .workflow-save-status { display: flex; flex: 0 0 100%; align-items: center; gap: 7px; margin: 0; font-size: 10px; line-height: 1.45; }
 .workflow-save-status.is-progress { color: #075f91; }
 .workflow-save-status.is-success { color: #267347; }
@@ -60,6 +61,15 @@
 .workflow-summary > div strong { color: #223651; font-size: 22px; font-variant-numeric: tabular-nums; }
 .workflow-summary .workflow-sum-money { align-items: flex-start; flex-direction: column; gap: 3px; padding-top: 9px; border-top: 1px solid #e6edf4; }
 .workflow-summary .workflow-sum-money strong { color: #0878b9; font-size: 16px; }
+.workflow-realization-contract { display: flex; grid-column: 1/-1; flex-wrap: wrap; gap: 9px; padding: 10px; border: 1px solid #d9eaf2; border-radius: 4px; background: #f2f9fc; }
+.workflow-realization-contract > div { display: grid; min-width: 135px; flex: 1; gap: 4px; }
+.workflow-realization-contract span { color: #718198; font-size: 8px; }
+.workflow-realization-contract strong { color: #213b59; font-size: 10px; }
+.workflow-payment-status { display: inline-flex; padding: 4px 7px; border-radius: 3px; font-size: 8px; font-weight: 700; }
+.workflow-payment-status.is-paid { color: #3f7049; background: #edf5e9; }
+.workflow-payment-status.is-unpaid { color: #936332; background: #fbf2e6; }
+.workflow-expand-button { display: inline-flex; align-items: center; gap: 4px; padding: 5px 7px; border: 1px solid #dce4ee; border-radius: 4px; color: #0878b9; background: #fff; font-size: 9px; }
+.workflow-expand-button[aria-expanded="true"] svg { transform: rotate(180deg); }
 .workflow-summary .workflow-criteria-count { justify-content: flex-start; gap: 7px; }
 .workflow-criteria-count span { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border: 1px solid #dbe9f1; border-radius: 4px; color: #0878b9; background: #f0f8fc; }
 .workflow-transfer-preview { display: flex; grid-column: 1/-1; align-items: center; justify-content: space-between; gap: 9px; padding: 11px; border: 1px solid #d9eaf2; border-radius: 4px; color: #0878b9; background: #f2f9fc; }
@@ -86,6 +96,8 @@
 .workflow-segment button.selected { color: #fff; background: #0878b9; }
 .workflow-table-scroll { width: 100%; overflow: auto; }
 .workflow-table-scroll table { width: 100%; min-width: 790px; border-collapse: collapse; text-align: left; }
+.workflow-realizations-table table { min-width: 1160px; }
+.workflow-realizations-table .workflow-component-details table { min-width: 850px; }
 .workflow-materials-freeze-scroll, .workflow-catalog-freeze-scroll { max-height: 420px; overscroll-behavior: contain; }
 .workflow-materials-freeze-scroll table, .workflow-catalog-freeze-scroll table { table-layout: fixed; border-collapse: separate; border-spacing: 0; }
 .workflow-materials-freeze-scroll table { min-width: 1080px; }

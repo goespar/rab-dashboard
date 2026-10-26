@@ -7,6 +7,7 @@ import {
 import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { exportWorkbook, formatCurrency, importWorkbook, parseRupiahPrice, sampleRecords } from './lib/workbook.js'
 import { applyFinalizedPaBalances, summarizePublicDashboard } from './lib/publicDashboard.js'
+import { accumulateProjectedBilling, getPlannedBilling } from './lib/contractBilling.js'
 import { findProgramRecordForRabGroup } from './lib/rabReferences.js'
 import { calculateRabBudgetTotal, calculateRabTotalsByProgramRecord } from './lib/rabTotals.js'
 import RabWorkflow from './RabWorkflow.jsx'
@@ -116,14 +117,24 @@ const REKAP_COLUMNS = [
   ['NILAI KONTRAK', 'contractValue'], ['PENGEMBALIAN PA', 'paReturn'], ['PENGGANTIAN BIAYA', 'costReplacement'], ['TAGIHAN', 'billed'],
   ['TOTAL BAYAR', 'paid'], ['SISA PRK', 'prkRemaining'], ['PROGRAM', 'program'], ['TAHUN ANGGARAN', 'year'],
   ['KETERANGAN', 'notes'], ['POS ANGGARAN', 'position'], ['TANGGAL AWAL', 'startDate'], ['TANGGAL AKHIR', 'endDate'],
-  ['RENCANA KONTRAK', 'plannedContract'], ['RENCANA TAGIH', 'plannedBilling'], ['PROGRESS', 'progress'],
+  ['RENCANA KONTRAK', 'plannedContract'], ['RENCANA TAGIH', 'plannedBilling'],
+  ['TAGIHAN JANUARI', 'billingJanuary'], ['TAGIHAN PEBRUARI', 'billingFebruary'], ['TAGIHAN MARET', 'billingMarch'],
+  ['TAGIHAN APRIL', 'billingApril'], ['TAGIHAN MEI', 'billingMay'], ['TAGIHAN JUNI', 'billingJune'],
+  ['TAGIHAN JULI', 'billingJuly'], ['TAGIHAN AGUSTUS', 'billingAugust'], ['TAGIHAN SEPTEMBER', 'billingSeptember'],
+  ['TAGIHAN OKTOBER', 'billingOctober'], ['TAGIHAN NOPEMBER', 'billingNovember'], ['TAGIHAN DESEMBER', 'billingDecember'],
+  ['PROGRESS', 'progress'],
   ['PROYEKSI TAGIH', 'projectedBilling'], ['TANGGAL BAYAR', 'paymentDate'],
 ]
 const DASHBOARD_COLUMNS = [
   REKAP_COLUMNS[0], REKAP_COLUMNS[7], REKAP_COLUMNS[11], REKAP_COLUMNS[12], REKAP_COLUMNS[13], REKAP_COLUMNS[16],
   REKAP_COLUMNS[19], REKAP_COLUMNS[20], REKAP_COLUMNS[21], REKAP_COLUMNS[22], REKAP_COLUMNS[23], REKAP_COLUMNS[24],
 ]
-const MONEY_COLUMNS = new Set(['totalPrk', 'relocation', 'skkiRevision', 'totalFinal', 'rabTotal', 'paTotal', 'contractValue', 'paReturn', 'costReplacement', 'billed', 'paid', 'prkRemaining', 'projectedBilling'])
+const MONEY_COLUMNS = new Set([
+  'totalPrk', 'relocation', 'skkiRevision', 'totalFinal', 'rabTotal', 'paTotal', 'contractValue', 'paReturn',
+  'costReplacement', 'billed', 'paid', 'prkRemaining', 'projectedBilling',
+  'billingJanuary', 'billingFebruary', 'billingMarch', 'billingApril', 'billingMay', 'billingJune',
+  'billingJuly', 'billingAugust', 'billingSeptember', 'billingOctober', 'billingNovember', 'billingDecember',
+])
 const DATE_COLUMNS = new Set(['startDate', 'endDate', 'plannedContract', 'plannedBilling', 'paymentDate'])
 function formatDateDisplay(value) {
   const match = String(value ?? '').match(/^(\d{4})-(\d{2})-(\d{2})(?:T|$)/)
@@ -132,6 +143,10 @@ function formatDateDisplay(value) {
 
 function formatDateInput(value) {
   return String(value ?? '').trim().match(/^\d{4}-\d{2}-\d{2}/)?.[0] || ''
+}
+
+function plannedBillingAmount(record) {
+  return getPlannedBilling(record).amount
 }
 
 function App() {
@@ -155,9 +170,11 @@ function App() {
   const [importModal, setImportModal] = useState(false)
   const [pendingImport, setPendingImport] = useState(null)
   const [importError, setImportError] = useState('')
+  const [importSaving, setImportSaving] = useState(false)
   const [editingRecord, setEditingRecord] = useState(null)
   const [connection, setConnection] = useState('local')
   const [notice, setNotice] = useState('')
+  const [savePending, setSavePending] = useState(false)
   const [logoutPending, setLogoutPending] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(() => Boolean(readSession()?.token))
   const [rabMenuOpen, setRabMenuOpen] = useState(false)
@@ -166,6 +183,8 @@ function App() {
   const [publicLoading, setPublicLoading] = useState(true)
   const [publicError, setPublicError] = useState('')
   const fileInput = useRef(null)
+  const saveRecordsPendingRef = useRef(false)
+  const importSavingRef = useRef(false)
   const clearRabEditRecord = useCallback(() => setRabEditRecordId(''), [])
 
   useEffect(() => {
@@ -275,10 +294,10 @@ function App() {
   }, [records])
 
   useEffect(() => {
-    if (!notice || logoutPending) return undefined
+    if (!notice || logoutPending || savePending) return undefined
     const timer = window.setTimeout(() => setNotice(''), 3600)
     return () => window.clearTimeout(timer)
-  }, [notice, logoutPending])
+  }, [notice, logoutPending, savePending])
 
   const years = YEAR_OPTIONS
   const recordsWithFinalizedPa = useMemo(
@@ -440,9 +459,17 @@ function App() {
   }
 
   async function saveRecords(nextRecords, successMessage) {
-    setRecords(nextRecords)
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextRecords))
+    if (saveRecordsPendingRef.current) {
+      return { ok: false, savedToSheets: false, message: 'Penyimpanan sedang berlangsung.' }
+    }
+    saveRecordsPendingRef.current = true
+    setSavePending(true)
+    setNotice('Menyimpan data ke Google Sheets...')
+    let locallyStored = false
     try {
+      setRecords(nextRecords)
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextRecords))
+      locallyStored = true
       const response = await apiPost({ action: 'save', records: nextRecords })
       const result = await response.json()
       if (!response.ok || !result.ok) throw new Error(result.error || 'Penyimpanan cloud gagal.')
@@ -451,9 +478,14 @@ function App() {
       return { ok: true, savedToSheets: true, message: `${successMessage} Tersimpan di Google Sheets.` }
     } catch (error) {
       setConnection('local')
-      const message = `${successMessage} Tersimpan lokal, tetapi gagal disinkronkan ke Google Sheets: ${error.message || 'Kesalahan koneksi.'}`
+      const message = locallyStored
+        ? `${successMessage} Tersimpan lokal, tetapi gagal disinkronkan ke Google Sheets: ${error.message || 'Kesalahan koneksi.'}`
+        : `Data gagal disimpan: ${error.message || 'Penyimpanan lokal tidak berhasil.'}`
       setNotice(message)
       return { ok: false, savedToSheets: false, message }
+    } finally {
+      saveRecordsPendingRef.current = false
+      setSavePending(false)
     }
   }
 
@@ -725,22 +757,30 @@ function App() {
   }
 
   async function confirmImport() {
-    if (!pendingImport?.records.length) return
-    await saveRecords(pendingImport.records, `${pendingImport.records.length} baris RAB berhasil diimpor.`)
-    const mergeImported = (current, imported) => {
-      const manualRows = current.filter((row) => !row.importedFrom)
-      const mergedImported = new Map(imported.map((row) => [row.id, row]))
-      return [...manualRows, ...mergedImported.values()]
+    if (!pendingImport?.records.length || importSavingRef.current) return
+    importSavingRef.current = true
+    setImportSaving(true)
+    setNotice('Mengimpor dan menyimpan data...')
+    try {
+      await saveRecords(pendingImport.records, `${pendingImport.records.length} baris RAB berhasil diimpor.`)
+      const mergeImported = (current, imported) => {
+        const manualRows = current.filter((row) => !row.importedFrom)
+        const mergedImported = new Map(imported.map((row) => [row.id, row]))
+        return [...manualRows, ...mergedImported.values()]
+      }
+      if (pendingImport.materials?.length) {
+        await saveWorkflowCollection('materials', mergeImported(workflowCollections.materials, pendingImport.materials), 'Master material diperbarui.')
+      }
+      if (pendingImport.activityCatalog?.length) {
+        await saveWorkflowCollection('activityCatalog', mergeImported(workflowCollections.activityCatalog, pendingImport.activityCatalog), 'Database kegiatan diperbarui.')
+      }
+      setImportModal(false)
+      setPendingImport(null)
+      setActiveView('data')
+    } finally {
+      importSavingRef.current = false
+      setImportSaving(false)
     }
-    if (pendingImport.materials?.length) {
-      await saveWorkflowCollection('materials', mergeImported(workflowCollections.materials, pendingImport.materials), 'Master material diperbarui.')
-    }
-    if (pendingImport.activityCatalog?.length) {
-      await saveWorkflowCollection('activityCatalog', mergeImported(workflowCollections.activityCatalog, pendingImport.activityCatalog), 'Database kegiatan diperbarui.')
-    }
-    setImportModal(false)
-    setPendingImport(null)
-    setActiveView('data')
   }
 
   async function saveRecord(event) {
@@ -759,8 +799,9 @@ function App() {
       endDate: String(form.get('endDate') || '').trim(),
       plannedContract: String(form.get('plannedContract') || '').trim(),
       plannedBilling: String(form.get('plannedBilling') || '').trim(),
+      billingAmount: numberOrBlank('billingAmount'),
       progress: String(form.get('progress') || '').trim(),
-      projectedBilling: numberOrBlank('projectedBilling'),
+      projectedBilling: accumulateProjectedBilling(record.projectedBilling, numberOrBlank('projectedBilling')),
       paymentDate: String(form.get('paymentDate') || '').trim(),
     } : record)
     await saveRecords(updated, 'Data anggaran diperbarui.')
@@ -902,13 +943,13 @@ function App() {
         <button className={`upload-zone ${pendingImport ? 'has-file' : ''}`} onClick={() => fileInput.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); receiveFile(event.dataTransfer.files[0]) }}><input ref={fileInput} type="file" accept=".xlsx" hidden onChange={(event) => { receiveFile(event.target.files[0]); event.target.value = '' }} /><div className="upload-icon">{pendingImport ? <Check size={20} /> : <Upload size={20} />}</div><strong>{pendingImport ? pendingImport.fileName : 'Klik untuk memilih file'}</strong><span>{pendingImport ? `Sheet: ${pendingImport.sheetName}` : 'atau tarik file Excel ke area ini (.xlsx)'}</span></button>
         {importError && <div className="inline-error"><CircleAlert size={16} />{importError}</div>}
         {pendingImport && <div className="import-preview"><div><span>Data rekap/PRK</span><strong>{pendingImport.records.length} baris</strong></div><div><span>Sheet rekap</span><strong>{pendingImport.sheetName}</strong></div><div><span>Master material</span><strong>{pendingImport.materials?.length || 0} item</strong></div><div><span>Database kegiatan</span><strong>{pendingImport.activityCatalog?.length || 0} kegiatan</strong></div><p>Data material dan kegiatan dari workbook akan digabung dengan master manual yang sudah ada.</p></div>}
-        <div className="modal-actions"><button className="button button-secondary" onClick={() => setImportModal(false)}>Batal</button><button className="button button-primary" disabled={!pendingImport?.records.length} onClick={confirmImport}><ArrowUpFromLine size={16} /><span>Impor {pendingImport ? `${pendingImport.records.length} data` : 'data'}</span></button></div>
+        <div className="modal-actions"><button className="button button-secondary" disabled={savePending || importSaving} onClick={() => setImportModal(false)}>Batal</button><button className="button button-primary" disabled={savePending || importSaving || !pendingImport?.records.length} onClick={confirmImport}>{savePending || importSaving ? <LoaderCircle className="toast-progress" size={16} /> : <ArrowUpFromLine size={16} />}<span>{savePending || importSaving ? 'Menyimpan...' : `Impor ${pendingImport ? `${pendingImport.records.length} data` : 'data'}`}</span></button></div>
       </section></div>}
 
       {editingRecord && canEdit && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditingRecord(null) }}><section className="modal contract-modal" role="dialog" aria-modal="true" aria-labelledby="contract-title"><div className="modal-heading"><div><p className="eyebrow">INPUT DATA ANGGARAN</p><h2 id="contract-title">Edit data anggaran</h2><p className="modal-project-name">{editingRecord.description}</p></div><button className="icon-button" aria-label="Tutup" onClick={() => setEditingRecord(null)}><X size={19} /></button></div>
-        <form onSubmit={saveRecord}><div className="record-edit-grid"><label className="field-label">Nomor kontrak<input name="contractNumber" defaultValue={editingRecord.contractNumber} placeholder="Masukkan nomor kontrak" /></label><label className="field-label">Vendor pemenang<input name="vendor" defaultValue={editingRecord.vendor} placeholder="Masukkan nama vendor pemenang" /></label><label className="field-label">Nilai kontrak aktual (Rp)<input name="contractValue" type="number" min="0" step="1" defaultValue={editingRecord.contractValue || ''} placeholder="0" /></label><label className="field-label">Tanggal awal<input name="startDate" type="date" defaultValue={formatDateInput(editingRecord.startDate)} /></label><label className="field-label">Tanggal akhir<input name="endDate" type="date" defaultValue={formatDateInput(editingRecord.endDate)} /></label><label className="field-label">Rencana kontrak<input name="plannedContract" type="date" defaultValue={formatDateInput(editingRecord.plannedContract)} /></label><label className="field-label">Rencana tagih<input name="plannedBilling" type="date" defaultValue={formatDateInput(editingRecord.plannedBilling)} /></label><label className="field-label">Progress<input name="progress" defaultValue={editingRecord.progress || ''} placeholder="Contoh: LUNAS" /></label><label className="field-label">Proyeksi tagih (Rp)<input name="projectedBilling" type="number" min="0" step="1" defaultValue={editingRecord.projectedBilling ?? ''} placeholder="0" /></label><label className="field-label">Tanggal bayar<input name="paymentDate" type="date" defaultValue={formatDateInput(editingRecord.paymentDate)} /></label></div><p className="form-note"><CircleAlert size={15} /> Nilai kontrak mengikuti dokumen kontrak; nilai PA tetap menjadi alokasi/pagu.</p><div className="modal-actions"><button type="button" className="button button-secondary" onClick={() => setEditingRecord(null)}>Batal</button><button type="submit" className="button button-primary"><Check size={16} />Simpan data</button></div></form>
+        <form onSubmit={saveRecord}><div className="record-edit-grid"><label className="field-label">Nomor kontrak<input name="contractNumber" defaultValue={editingRecord.contractNumber} placeholder="Masukkan nomor kontrak" /></label><label className="field-label">Vendor pemenang<input name="vendor" defaultValue={editingRecord.vendor} placeholder="Masukkan nama vendor pemenang" /></label><label className="field-label">Nilai kontrak aktual (Rp)<input name="contractValue" type="number" min="0" step="1" defaultValue={editingRecord.contractValue || ''} placeholder="0" /></label><label className="field-label">Tanggal awal<input name="startDate" type="date" defaultValue={formatDateInput(editingRecord.startDate)} /></label><label className="field-label">Tanggal akhir<input name="endDate" type="date" defaultValue={formatDateInput(editingRecord.endDate)} /></label><label className="field-label">Rencana kontrak<input name="plannedContract" type="date" defaultValue={formatDateInput(editingRecord.plannedContract)} /></label><label className="field-label">Rencana tagih<input name="plannedBilling" type="date" defaultValue={formatDateInput(editingRecord.plannedBilling)} /></label><label className="field-label">Nilai tagihan (Rp)<input name="billingAmount" type="number" min="0" step="1" defaultValue={plannedBillingAmount(editingRecord)} placeholder="0" /></label><label className="field-label">Progress<input name="progress" defaultValue={editingRecord.progress || ''} placeholder="Contoh: LUNAS" /></label><label className="field-label">Tambahan proyeksi tagih bulan ini (Rp)<input name="projectedBilling" type="number" min="0" step="1" defaultValue="" placeholder="0" /></label><label className="field-label">Tanggal bayar<input name="paymentDate" type="date" defaultValue={formatDateInput(editingRecord.paymentDate)} /></label></div><p className="form-note"><CircleAlert size={15} /> Nilai tagihan masuk ke kolom bulanan sesuai tanggal rencana tagih. Proyeksi bulan ini akan ditambahkan ke akumulasi proyeksi sebelumnya; kosongkan jika tidak ada tambahan.</p><div className="modal-actions"><button type="button" className="button button-secondary" disabled={savePending} onClick={() => setEditingRecord(null)}>Batal</button><button type="submit" className="button button-primary" disabled={savePending}>{savePending ? <><LoaderCircle className="toast-progress" size={16} />Menyimpan...</> : <><Check size={16} />Simpan data</>}</button></div></form>
       </section></div>}
-      {notice && <div className="toast" role="status">{logoutPending ? <LoaderCircle className="toast-progress" size={16} /> : <Check size={16} />}{notice}</div>}
+      {notice && <div className="toast" role="status" aria-live="polite">{logoutPending || savePending || importSaving ? <LoaderCircle className="toast-progress" size={16} /> : notice.toLowerCase().includes('gagal') ? <CircleAlert size={16} /> : <Check size={16} />}{notice}</div>}
     </div>
   )
 }
@@ -1247,6 +1288,8 @@ function UserManagement() {
   const [form, setForm] = useState(emptyUser)
   const [notice, setNotice] = useState('')
   const [saving, setSaving] = useState(false)
+  const [updatingUserId, setUpdatingUserId] = useState('')
+  const savingRef = useRef(false)
 
   async function reloadUsers() {
     const response = await apiPost({ action: 'listUsers' })
@@ -1261,8 +1304,10 @@ function UserManagement() {
 
   async function save(event) {
     event.preventDefault()
+    if (savingRef.current) return
+    savingRef.current = true
     setSaving(true)
-    setNotice('')
+    setNotice('Menyimpan data pengguna...')
     try {
       const response = await apiPost({ action: 'saveUser', user: form })
       const result = await response.json()
@@ -1273,19 +1318,27 @@ function UserManagement() {
     } catch (error) {
       setNotice(error.message)
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }
 
   async function toggleActive(user) {
-    setNotice('')
+    if (savingRef.current) return
+    savingRef.current = true
+    setUpdatingUserId(user.id)
+    setNotice('Menyimpan perubahan status pengguna...')
     try {
       const response = await apiPost({ action: 'saveUser', user: { ...user, password: '', active: !user.active } })
       const result = await response.json()
       if (!response.ok || !result.ok) throw new Error(result.error || 'Status pengguna gagal diubah.')
       await reloadUsers()
+      setNotice('Status pengguna berhasil diperbarui.')
     } catch (error) {
       setNotice(error.message)
+    } finally {
+      savingRef.current = false
+      setUpdatingUserId('')
     }
   }
 
@@ -1298,17 +1351,17 @@ function UserManagement() {
           <label className="field-label">Username<input required minLength="3" value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></label>
           <label className="field-label">Peran<select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option value="admin">Admin</option><option value="planner">Tim Perencanaan</option><option value="viewer">Viewer (baca saja)</option></select></label>
           <label className="field-label">{form.id ? 'Kata sandi baru (opsional)' : 'Kata sandi'}<input type="password" minLength="12" required={!form.id} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} autoComplete="new-password" /></label>
-          <div className="user-form-actions"><button type="submit" className="button button-primary" disabled={saving}>{saving ? 'Menyimpan...' : form.id ? 'Simpan perubahan' : 'Buat akun'}</button>{form.id && <button type="button" className="button button-secondary" onClick={() => setForm(emptyUser)}>Batal</button>}</div>
+          <div className="user-form-actions"><button type="submit" className="button button-primary" disabled={saving || Boolean(updatingUserId)}>{saving ? <><LoaderCircle className="toast-progress" size={15} />Menyimpan...</> : form.id ? 'Simpan perubahan' : 'Buat akun'}</button>{form.id && <button type="button" className="button button-secondary" disabled={saving || Boolean(updatingUserId)} onClick={() => setForm(emptyUser)}>Batal</button>}</div>
         </form>
       </section>
       <section className="panel table-panel user-list-panel"><div className="table-heading"><div><p className="eyebrow">AKUN TERDAFTAR</p><h2>Pengguna</h2></div><span className="row-count">{users.length} akun</span></div>
         <div className="table-scroll"><table><thead><tr><th>Nama</th><th>Username</th><th>Peran</th><th>Status</th><th>Aksi</th></tr></thead><tbody>
-          {users.map((user) => <tr key={user.id}><td>{user.name}</td><td>{user.username}</td><td>{{ admin: 'Admin', planner: 'Tim Perencanaan', viewer: 'Viewer' }[user.role]}</td><td>{user.active ? 'Aktif' : 'Nonaktif'}</td><td><div className="user-row-actions"><button className="workflow-edit" aria-label={`Edit ${user.username}`} onClick={() => setForm({ ...user, password: '' })}><Pencil size={14} /></button><button className="button button-secondary user-status-button" onClick={() => toggleActive(user)}>{user.active ? 'Nonaktifkan' : 'Aktifkan'}</button></div></td></tr>)}
+          {users.map((user) => <tr key={user.id}><td>{user.name}</td><td>{user.username}</td><td>{{ admin: 'Admin', planner: 'Tim Perencanaan', viewer: 'Viewer' }[user.role]}</td><td>{user.active ? 'Aktif' : 'Nonaktif'}</td><td><div className="user-row-actions"><button className="workflow-edit" aria-label={`Edit ${user.username}`} disabled={saving || Boolean(updatingUserId)} onClick={() => setForm({ ...user, password: '' })}><Pencil size={14} /></button><button className="button button-secondary user-status-button" disabled={saving || Boolean(updatingUserId)} onClick={() => toggleActive(user)}>{updatingUserId === user.id ? <><LoaderCircle className="toast-progress" size={12} />Menyimpan...</> : user.active ? 'Nonaktifkan' : 'Aktifkan'}</button></div></td></tr>)}
           {!users.length && <tr><td colSpan="5">Belum ada akun.</td></tr>}
         </tbody></table></div>
       </section>
     </div>
-    {notice && <div className="user-management-notice" role="status">{notice}</div>}
+    {notice && <div className="user-management-notice" role="status">{(saving || updatingUserId) && <LoaderCircle className="toast-progress" size={13} />}{notice}</div>}
   </div>
 }
 

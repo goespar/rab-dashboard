@@ -4,6 +4,7 @@ import { formatCurrency, parseNumber } from './lib/workbook.js'
 import { terbilangRupiah } from './lib/terbilang.js'
 import { findProgramRecordForRabGroup } from './lib/rabReferences.js'
 import { calculateRabBudgetTotal } from './lib/rabTotals.js'
+import { getBillingForDate, getPlannedBilling } from './lib/contractBilling.js'
 import plnLogo from '../logo/Logo_PLN.png'
 import './workflow.css'
 
@@ -14,7 +15,7 @@ const VIEW_META = {
   activities: { title: 'Rekap RAB', description: 'Lihat dan cetak RAB yang sudah disimpan pada menu Input RAB.', icon: ClipboardList, collection: 'activities' },
   paFinalization: { title: 'Finalisasi RAB ke PA', description: 'Pilih Rekap RAB untuk ditambahkan ke PA, lalu catat nomor dan nilai kontrak.', icon: ArrowRightLeft, collection: 'paTransfers' },
   materialRecap: { title: 'Rekap Material', description: 'Bandingkan kebutuhan material dari RAB dengan pemakaian aktual.', icon: Boxes, collection: 'materialRecap' },
-  realizations: { title: 'Realisasi', description: 'Catat progres volume, tagihan, dan pembayaran kegiatan.', icon: Activity, collection: 'realizations' },
+  realizations: { title: 'Realisasi', description: 'Catat setiap tanggal tagihan dan pembayaran per kontrak, lalu pantau sisa nilai kontrak.', icon: Activity, collection: 'realizations' },
 }
 
 const EMPTY_FORM = {
@@ -24,7 +25,7 @@ const EMPTY_FORM = {
   activities: { rabNumber: '', rabTitle: '', paNumber: '', programRecordId: '', prk: '', position: '', criteria: 'TR', workPackage: '', year: new Date().getFullYear(), notes: '' },
   paFinalization: { recordId: '', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' },
   materialRecap: { activityId: '', materialId: '', quantity: '', date: new Date().toISOString().slice(0, 10), notes: '' },
-  realizations: { activityId: '', date: new Date().toISOString().slice(0, 10), volume: '', billed: '', paid: '', notes: '' },
+  realizations: { prk: '', activityId: '', date: new Date().toISOString().slice(0, 10), billed: '', paid: '', paymentStatus: 'BELUM LUNAS', notes: '' },
 }
 
 const number = (value) => parseNumber(value)
@@ -66,11 +67,13 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
   const [printGroupKey, setPrintGroupKey] = useState('')
   const [componentMaterialFilters, setComponentMaterialFilters] = useState({ operation: 'all', criteria: 'all', source: 'all' })
   const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
   const [saveStatus, setSaveStatus] = useState(null)
   const [editingId, setEditingId] = useState('')
   const [expandedComponentGroup, setExpandedComponentGroup] = useState('')
   const [expandedRabMaterialGroup, setExpandedRabMaterialGroup] = useState('')
   const [expandedActivityGroup, setExpandedActivityGroup] = useState('')
+  const [expandedRealizationGroup, setExpandedRealizationGroup] = useState('')
   const [finalizeRabGroup, setFinalizeRabGroup] = useState(null)
   const [finalizationSearch, setFinalizationSearch] = useState('')
   const [finalizationPrkFilter, setFinalizationPrkFilter] = useState('all')
@@ -303,10 +306,101 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
   const inputRabDpp = inputRabSubtotal * 11 / 12
   const inputRabTotalAnggaran = calculateRabBudgetTotal(inputRabSubtotal)
   const inputRabPpn = inputRabTotalAnggaran - inputRabSubtotal
-  const activityGroupChoices = [...new Map(activities.map((activity) => {
-    const key = `${String(activity.prk || '').trim()}::${normalizeWorkName(activity.componentName || activity.name)}`
-    return [key, activity]
-  })).values()]
+  const realizationActivities = view === 'realizations'
+    ? [...components.reduce((groups, component) => {
+      const name = String(component.activity || component.componentName || component.name || '').trim()
+      if (!name) return groups
+      const prk = String(component.prk || '').trim()
+      const catalogActivity = activityCatalog.find((activity) =>
+        String(activity.prk || '').trim() === prk
+          && normalizeWorkName(activity.name) === normalizeWorkName(name))
+      const workPackage = component.workPackage || catalogActivity?.workPackage || name
+      const rabTitle = String(component.rabTitle || '').trim()
+      const rabNumber = String(component.rabNumber || '').trim()
+      const key = JSON.stringify([prk, normalizeWorkName(workPackage), normalizeWorkName(rabTitle), normalizeWorkName(rabNumber), normalizeWorkName(name)])
+      const group = groups.get(key) || {
+        id: `input-rab:${key}`,
+        name,
+        componentName: name,
+        prk,
+        workPackage,
+        criteriaValues: new Set(),
+        programRecordIds: new Set(),
+        program: component.program || '',
+        year: component.year || '',
+      }
+      const criteria = normalizeCriteria(component.criteria || catalogActivity?.criteria)
+      if (criteria) group.criteriaValues.add(criteria)
+      if (component.programRecordId) group.programRecordIds.add(String(component.programRecordId))
+      groups.set(key, group)
+      return groups
+    }, new Map()).values()].map((group) => ({
+      ...group,
+      criteria: [...group.criteriaValues].join(', '),
+      programRecordId: group.programRecordIds.size === 1 ? [...group.programRecordIds][0] : '',
+    }))
+    : []
+  const activityGroupChoices = view === 'realizations'
+    ? realizationActivities.filter((activity) => String(activity.prk || '') === String(form.prk || ''))
+    : [...new Map(activities.map((activity) => {
+      const key = `${String(activity.prk || '').trim()}::${normalizeWorkName(activity.componentName || activity.name)}`
+      return [key, activity]
+    })).values()]
+  const realizationActivityById = new Map([
+    ...activities.map((activity) => [String(activity.id), activity]),
+    ...realizationActivities.map((activity) => [String(activity.id), activity]),
+  ])
+  const programRecordForActivity = (activity) => activity ? findProgramRecordForRabGroup(programRecords, {
+    prk: activity.prk,
+    workPackage: activity.workPackage || activity.componentName || activity.name,
+    records: [{ programRecordId: activity.programRecordId, program: activity.program, year: activity.year }],
+  }) : null
+  const selectedRealizationActivity = realizationActivityById.get(String(form.activityId))
+  const selectedRealizationContract = programRecordForActivity(selectedRealizationActivity)
+  const selectedRealizationBilling = getBillingForDate(selectedRealizationContract, form.date)
+  const selectedRealizationBillingIsScheduled = selectedRealizationBilling.amount !== ''
+    && selectedRealizationBilling.amount !== null
+    && selectedRealizationBilling.amount !== undefined
+  const realizationGroups = view === 'realizations' ? [...filteredRows.reduce((groups, row) => {
+    const activity = realizationActivityById.get(String(row.activityId))
+    const contract = programRecordForActivity(activity)
+    const activityGroup = activity
+      ? `${String(activity.prk || '').trim()}::${normalizeWorkName(activity.componentName || activity.name)}`
+      : String(row.activityId || 'unknown')
+    const key = contract ? `contract:${contract.id}` : `activity:${activityGroup}`
+    const group = groups.get(key) || {
+      key,
+      contract,
+      prk: contract?.prk || activity?.prk || row.prk || '',
+      contractNumber: contract?.contractNumber || '',
+      activityNames: new Set(),
+      entries: [],
+    }
+    if (activity) group.activityNames.add(activity.componentName || activity.name)
+    group.entries.push({ row, activity })
+    groups.set(key, group)
+    return groups
+  }, new Map()).values()].map((group) => {
+    const billed = group.entries.reduce((sum, entry) => sum + number(entry.row.billed), 0)
+    const paid = group.entries.reduce((sum, entry) => sum + number(entry.row.paid), 0)
+    const latest = group.entries.reduce((current, entry) => {
+      const date = String(entry.row.date || '')
+      const createdAt = String(entry.row.createdAt || '')
+      return !current || date > current.date || (date === current.date && createdAt > current.createdAt)
+        ? { date, createdAt, status: entry.row.paymentStatus }
+        : current
+    }, null)
+    return {
+      ...group,
+      activityNames: [...group.activityNames],
+      entries: group.entries.sort((left, right) => String(right.row.date || '').localeCompare(String(left.row.date || ''))),
+      contractValue: number(group.contract?.contractValue),
+      billed,
+      paid,
+      remaining: Math.max(0, number(group.contract?.contractValue) - paid),
+      latestStatus: latest?.status || '',
+    }
+  }) : []
   const availableMaterials = selectedActivity
     ? [...new Set([
       ...activities.filter((activity) => String(activity.prk || '').trim() === String(selectedActivity.prk || '').trim()
@@ -446,6 +540,8 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
         totalAnggaran: calculateRabBudgetTotal(group.components.reduce((sum, component) => sum + component.total, 0)),
       }))
     : []
+  const realizationPrkChoices = [...new Set(realizationActivities.map((activity) => activity.prk).filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right))
   const finalizationGroups = view === 'activities' || view === 'paFinalization'
     ? activitySavedGroups.filter((group) => {
       const source = findProgramRecordForRabGroup(programRecords, group)
@@ -518,7 +614,40 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
 
   function updateField(name, value) {
     setSaveStatus(null)
+    if (view === 'realizations' && name === 'date') {
+      const billing = getBillingForDate(selectedRealizationContract, value)
+      setForm((current) => ({
+        ...current,
+        date: value,
+        billed: billing.amount === '' ? '' : String(billing.amount),
+      }))
+      return
+    }
     setForm((current) => ({ ...current, [name]: value }))
+  }
+
+  function updateRealizationActivity(activityId) {
+    const activity = realizationActivityById.get(String(activityId))
+    const contract = programRecordForActivity(activity)
+    const billing = getPlannedBilling(contract)
+    setSaveStatus(null)
+    setForm((current) => ({
+      ...current,
+      activityId,
+      date: billing.date,
+      billed: billing.amount === '' ? '' : String(billing.amount),
+    }))
+  }
+
+  function updateRealizationPrk(prk) {
+    setSaveStatus(null)
+    setForm((current) => ({
+      ...current,
+      prk,
+      activityId: '',
+      date: '',
+      billed: '',
+    }))
   }
 
   function updateMaterialSelection(materialId) {
@@ -637,29 +766,31 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
   }
 
   async function saveWorkflowData(nextRecords, successMessage) {
-    const tracksSheetProgress = view === 'components' || view === 'activities'
-    const result = await onSave(meta.collection, nextRecords, successMessage, (stage) => {
-      if (!tracksSheetProgress) return
+    const recordsToSave = view === 'realizations'
+      ? nextRecords.map((record) => {
+        const normalized = { ...record }
+        delete normalized.volume
+        return normalized
+      })
+      : nextRecords
+    const result = await onSave(meta.collection, recordsToSave, successMessage, (stage) => {
       setSaveStatus({
         type: 'progress',
         message: stage === 'local' ? 'Data tersimpan lokal. Menyiapkan Google Sheets...' : 'Mengirim data ke Google Sheets...',
       })
     })
-    if (tracksSheetProgress) {
-      setSaveStatus(result?.ok === false
-        ? { type: 'error', message: result.message || 'Data tersimpan lokal, tetapi gagal disimpan ke Google Sheets.' }
-        : { type: 'success', message: result?.message || 'Data berhasil disimpan ke Google Sheets.' })
-    }
+    setSaveStatus(result?.ok === false
+      ? { type: 'error', message: result.message || 'Data tersimpan lokal, tetapi gagal disimpan ke Google Sheets.' }
+      : { type: 'success', message: result?.message || 'Data berhasil disimpan ke Google Sheets.' })
     return result
   }
 
   async function submit(event) {
     event.preventDefault()
-    if (view === 'activities') return
+    if (view === 'activities' || savingRef.current) return
+    savingRef.current = true
     setSaving(true)
-    if (view === 'components' || view === 'activities') {
-      setSaveStatus({ type: 'progress', message: 'Menyiapkan penyimpanan lokal...' })
-    }
+    setSaveStatus({ type: 'progress', message: 'Menyiapkan penyimpanan...' })
     try {
       if (view === 'paFinalization') {
         const activity = activities.find((item) => item.programRecordId === selectedProgramRecord?.id)
@@ -671,7 +802,12 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
           notes: form.notes,
           criteria: activity?.criteria || '',
         })
-        if (completed) setForm({ ...EMPTY_FORM[view] })
+        if (completed) {
+          setForm({ ...EMPTY_FORM[view] })
+          setSaveStatus({ type: 'success', message: 'Finalisasi berhasil disimpan.' })
+        } else {
+          setSaveStatus({ type: 'error', message: 'Finalisasi gagal disimpan. Periksa pemberitahuan sebelum mencoba lagi.' })
+        }
         return
       }
       const originalRecord = rows.find((row) => row.id === editingId)
@@ -826,13 +962,17 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
         record.activityName = activity?.name || ''
       }
       if (view === 'realizations') {
-        record.volume = number(form.volume)
-        record.billed = number(form.billed)
+        const billing = getBillingForDate(selectedRealizationContract, form.date)
+        record.billed = billing.amount !== '' && billing.amount !== null && billing.amount !== undefined
+          ? number(billing.amount)
+          : number(form.billed)
         record.paid = number(form.paid)
-        const activity = activities.find((item) => item.id === form.activityId)
+        record.paymentStatus = String(form.paymentStatus || 'BELUM LUNAS')
+        const activity = realizationActivityById.get(String(form.activityId))
         record.criteria = activity?.criteria || ''
         record.prk = activity?.prk || ''
         record.activityName = activity?.name || ''
+        record.programRecordId = selectedRealizationContract?.id || activity?.programRecordId || ''
       }
       const nextRecords = editingId ? rows.map((row) => row.id === editingId ? record : row) : [record, ...rows]
       await saveWorkflowData(nextRecords, editingId ? `${meta.title} berhasil diperbarui.` : `${meta.title} berhasil disimpan.`)
@@ -841,18 +981,39 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
         : { ...EMPTY_FORM[view] })
       setEditingId('')
     } catch (error) {
-      if (view === 'components' || view === 'activities') {
-        setSaveStatus({ type: 'error', message: `Penyimpanan gagal: ${error.message || 'Terjadi kesalahan yang tidak diketahui.'}` })
-      } else throw error
+      setSaveStatus({ type: 'error', message: `Penyimpanan gagal: ${error.message || 'Terjadi kesalahan yang tidak diketahui.'}` })
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }
 
   async function removeRecord(id) {
+    if (saving) return
     if (view === 'components' && !window.confirm('Hapus baris material ini dari Input RAB? Total RAB dan kolom M akan dihitung ulang.')) return
     const next = rows.filter((row) => row.id !== id)
-    await onSave(meta.collection, next, 'Data berhasil dihapus.')
+    await persistWorkflowChanges(meta.collection, next, 'Data berhasil dihapus.')
+  }
+
+  async function persistWorkflowChanges(collection, nextRecords, successMessage) {
+    if (saving) return
+    setSaving(true)
+    setSaveStatus({ type: 'progress', message: 'Menyimpan perubahan...' })
+    try {
+      const result = await onSave(collection, nextRecords, successMessage, (stage) => {
+        setSaveStatus({
+          type: 'progress',
+          message: stage === 'local' ? 'Data tersimpan lokal. Menyiapkan Google Sheets...' : 'Mengirim data ke Google Sheets...',
+        })
+      })
+      setSaveStatus(result?.ok === false
+        ? { type: 'error', message: result.message || 'Data tersimpan lokal, tetapi gagal disimpan ke Google Sheets.' }
+        : { type: 'success', message: result?.message || successMessage })
+    } catch (error) {
+      setSaveStatus({ type: 'error', message: `Penyimpanan gagal: ${error.message || 'Terjadi kesalahan yang tidak diketahui.'}` })
+    } finally {
+      setSaving(false)
+    }
   }
 
   function printActivitySavedGroup(group) {
@@ -865,10 +1026,11 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
   }
 
   async function removeComponentGroup(group) {
+    if (saving) return
     if (!window.confirm(`Hapus "${group.title}" beserta seluruh materialnya dari Input RAB? Total RAB dan kolom M akan dihitung ulang.`)) return
     const groupIds = new Set(group.rows.map((row) => row.id))
     const next = rows.filter((row) => !groupIds.has(row.id))
-    await onSave(meta.collection, next, 'RAB komponen berhasil dihapus.')
+    await persistWorkflowChanges(meta.collection, next, 'RAB komponen berhasil dihapus.')
   }
 
   function printComponentGroup(group) {
@@ -953,20 +1115,20 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
   }, [components, editComponentId, editRecord, onEditComponentHandled, view])
 
   async function removeSavedActivityGroup(group) {
-    if (readOnly) return
+    if (readOnly || saving) return
     const groupIds = new Set(group.records.map((record) => record.id))
     if (!groupIds.size || !window.confirm(`Hapus "${group.rabTitle || group.workPackage}" beserta seluruh komponennya dari Input RAB? Total anggaran dan kolom M akan dihitung ulang.`)) return
     const next = components.filter((component) => !groupIds.has(component.id))
-    await onSave('components', next, 'Rekap RAB berhasil dihapus.')
+    await persistWorkflowChanges('components', next, 'Rekap RAB berhasil dihapus.')
   }
 
   function rowActions(record, label, onDelete) {
     if (readOnly) return <td className="workflow-actions-cell" />
-    return <td className="workflow-actions-cell"><div className="workflow-row-actions">{!onDelete && <button className="workflow-edit" aria-label={`Edit ${label}`} onClick={() => editRecord(record)}><Pencil size={14} /></button>}<button className="workflow-delete" type="button" aria-label={onDelete ? `Batalkan ${label}` : `Hapus ${label}`} onClick={() => onDelete ? onDelete(record) : removeRecord(record.id)}><Trash2 size={14} /></button></div></td>
+    return <td className="workflow-actions-cell"><div className="workflow-row-actions">{!onDelete && <button className="workflow-edit" disabled={saving} aria-label={`Edit ${label}`} onClick={() => editRecord(record)}><Pencil size={14} /></button>}<button className="workflow-delete" type="button" disabled={saving} aria-label={onDelete ? `Batalkan ${label}` : `Hapus ${label}`} onClick={() => onDelete ? onDelete(record) : removeRecord(record.id)}><Trash2 size={14} /></button></div></td>
   }
 
   function field(name, label, options = {}) {
-    const { type = 'text', required = true, placeholder = '', choices, min = 0, max, onChange, searchable = false } = options
+    const { type = 'text', required = true, placeholder = '', choices, min = 0, max, onChange, searchable = false, value = form[name], readOnly = false } = options
     const choiceDropdownOpen = openChoiceField === name
     const matchingChoices = searchable && choiceDropdownOpen && choiceSearch
       ? choices.filter((choice) => choice.label.toLowerCase().includes(choiceSearch.toLowerCase()))
@@ -1009,7 +1171,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
         }}>
           <option value="">Pilih {label.toLowerCase()}</option>
           {choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
-        </select> : <input required={required} type={type === 'number' ? 'text' : type} inputMode={type === 'number' ? 'decimal' : undefined} value={form[name]} placeholder={placeholder} onChange={(event) => {
+        </select> : <input required={required} readOnly={readOnly} type={type === 'number' ? 'text' : type} inputMode={type === 'number' ? 'decimal' : undefined} value={value} placeholder={placeholder} onChange={(event) => {
         if (type === 'number') {
           const rawValue = event.target.value
           const numericValue = parseNumber(rawValue)
@@ -1103,7 +1265,8 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
 
   async function submitFinalizeRab(event) {
     event.preventDefault()
-    if (!finalizeRabGroup || !onFinalizeRab) return
+    if (!finalizeRabGroup || !onFinalizeRab || savingRef.current) return
+    savingRef.current = true
     setSaving(true)
     setSaveStatus({ type: 'progress', message: 'Memfinalisasi RAB ke PA...' })
     try {
@@ -1121,6 +1284,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
     } catch (error) {
       setSaveStatus({ type: 'error', message: `Finalisasi gagal: ${error.message || 'Terjadi kesalahan yang tidak diketahui.'}` })
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }
@@ -1301,11 +1465,19 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
       {field('date', 'Tanggal pemakaian', { type: 'date' })}
     </>
     return <>
-      {field('activityId', 'Kegiatan RAB', { choices: activityGroupChoices.map((activity) => ({ value: activity.id, label: `${activity.criteria} | ${activity.prk} | ${activity.componentName || activity.name}` })) })}
-      {field('date', 'Tanggal realisasi', { type: 'date' })}
-      {field('volume', 'Volume terealisasi', { type: 'number', step: '0.001', placeholder: '0' })}
-      {field('billed', 'Nilai tagihan (Rp)', { type: 'number', step: '1', placeholder: '0', required: false })}
+      {field('prk', 'No. PRK', { choices: realizationPrkChoices.map((prk) => ({ value: prk, label: prk })), onChange: updateRealizationPrk })}
+      {field('activityId', 'Kegiatan RAB', { choices: activityGroupChoices.map((activity) => ({ value: activity.id, label: `${activity.criteria || '-'} | ${activity.workPackage ? `${activity.workPackage} — ` : ''}${activity.componentName || activity.name}` })), onChange: updateRealizationActivity, searchable: true })}
+      {selectedRealizationContract && <div className="workflow-realization-contract workflow-rab-step-full"><div><span>Nilai kontrak</span><strong>{formatCurrency(selectedRealizationContract.contractValue)}</strong></div><div><span>Total dibayar</span><strong>{formatCurrency(number(selectedRealizationContract.paid))}</strong></div><div><span>Sisa kontrak</span><strong>{formatCurrency(Math.max(0, number(selectedRealizationContract.contractValue) - number(selectedRealizationContract.paid)))}</strong></div></div>}
+      {field('date', 'Tanggal tagihan / realisasi', { type: 'date' })}
+      {field('billed', 'Nilai tagihan (Rp)', { type: 'number', step: '1', placeholder: '0', value: selectedRealizationBillingIsScheduled ? String(selectedRealizationBilling.amount) : form.billed, readOnly: selectedRealizationBillingIsScheduled })}
+      {selectedRealizationContract && form.date && !selectedRealizationBillingIsScheduled && <div className="workflow-hint workflow-rab-step-full" role="status">
+        Nominal tagihan untuk bulan ini belum ditemukan pada kontrak yang terhubung. Periksa kolom TAGIHAN BULANAN di Data Kontrak, lalu muat ulang data jika nilainya baru diubah di Google Sheets.
+      </div>}
       {field('paid', 'Nilai dibayar (Rp)', { type: 'number', step: '1', placeholder: '0', required: false })}
+      {field('paymentStatus', 'Status pembayaran', { choices: [
+        { value: 'BELUM LUNAS', label: 'BELUM LUNAS' },
+        { value: 'LUNAS', label: 'LUNAS' },
+      ] })}
     </>
   }
 
@@ -1424,9 +1596,23 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
         ] : []),
       ]
     })
-    if (view === 'realizations') return filteredRows.map((row) => {
-      const activity = activities.find((item) => item.id === row.activityId)
-      return <tr key={row.id}><td>{activity?.criteria || '-'}</td><td>{activity?.prk || '-'}</td><td>{activity?.name || '-'}</td><td>{row.date}</td><td>{row.volume}</td><td>{formatCurrency(row.billed)}</td><td>{formatCurrency(row.paid)}</td>{rowActions(row, 'realisasi')}</tr>
+    if (view === 'realizations') return realizationGroups.flatMap((group) => {
+      const isExpanded = expandedRealizationGroup === group.key
+      return [
+        <tr key={group.key}>
+          <td>{group.entries[0]?.activity?.criteria || '-'}</td>
+          <td>{group.prk || '-'}</td>
+          <td>{group.activityNames.join(', ') || '-'}</td>
+          <td>{group.contractNumber || '-'}</td>
+          <td className="workflow-total">{formatCurrency(group.contractValue)}</td>
+          <td className="workflow-total">{formatCurrency(group.billed)}</td>
+          <td className="workflow-total">{formatCurrency(group.paid)}</td>
+          <td className="workflow-total">{formatCurrency(group.remaining)}</td>
+          <td><span className={`workflow-payment-status ${group.latestStatus === 'LUNAS' ? 'is-paid' : 'is-unpaid'}`}>{group.latestStatus || 'BELUM LUNAS'}</span></td>
+          <td><button className="workflow-expand-button" type="button" aria-expanded={isExpanded} onClick={() => setExpandedRealizationGroup(isExpanded ? '' : group.key)}><ChevronDown size={14} />{isExpanded ? 'Tutup' : `${group.entries.length} rincian`}</button></td>
+        </tr>,
+        ...(isExpanded ? [<tr className="workflow-component-detail-row" key={`${group.key}-details`}><td colSpan="10"><div className="workflow-component-details"><table><thead><tr><th>Tanggal tagihan / realisasi</th><th>Kegiatan</th><th>Nilai tagihan</th><th>Nilai dibayar</th><th>Status pembayaran</th><th>Catatan</th><th>Aksi</th></tr></thead><tbody>{group.entries.map(({ row, activity }) => <tr key={row.id}><td>{row.date || '-'}</td><td>{activity?.componentName || activity?.name || row.activityName || '-'}</td><td>{formatCurrency(row.billed)}</td><td>{formatCurrency(row.paid)}</td><td><span className={`workflow-payment-status ${row.paymentStatus === 'LUNAS' ? 'is-paid' : 'is-unpaid'}`}>{row.paymentStatus || 'BELUM LUNAS'}</span></td><td>{row.notes || '-'}</td>{rowActions(row, 'realisasi')}</tr>)}</tbody><tfoot><tr><td colSpan="2">Total kumulatif</td><td>{formatCurrency(group.billed)}</td><td>{formatCurrency(group.paid)}</td><td colSpan="3">Sisa kontrak {formatCurrency(group.remaining)}</td></tr></tfoot></table></div></td></tr>] : []),
+      ]
     })
     if (view === 'components') {
       return componentDisplayGroups.flatMap((group, index) => {
@@ -1524,7 +1710,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
     activities: ['No', 'Uraian Komponen', 'Jumlah material', 'Jumlah jasa', 'Jumlah', 'Aksi'],
     paFinalization: ['Tanggal', 'Kriteria', 'No. PRK', 'No. RAB', 'Dialihkan', 'RAB sebelum', 'RAB sesudah', 'PA sebelum', 'PA sesudah', ''],
     materialRecap: ['Kriteria', 'No. PRK', 'Kegiatan', 'Material', 'Kebutuhan RAB', 'Terpakai aktual', 'Sisa/selisih'],
-    realizations: ['Kriteria', 'No. PRK', 'Kegiatan', 'Tanggal', 'Volume', 'Tagihan', 'Dibayar', ''],
+    realizations: ['Kriteria', 'No. PRK', 'Kegiatan', 'No. Kontrak', 'Nilai Kontrak', 'Nilai Terserap/Tagihan', 'Total Dibayar', 'Sisa Kontrak', 'Status Pembayaran', 'Rincian'],
   }[view]
   const componentTotals = componentDisplayGroups.reduce((sum, group) => {
     group.rows.forEach((row) => {
@@ -1668,11 +1854,17 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
     : view === 'paFinalization'
       ? { label: 'Total dana dialihkan', value: filteredRows.reduce((sum, row) => sum + number(row.amount), 0) }
     : view === 'realizations'
-      ? { label: 'Total pembayaran tercatat', value: filteredRows.reduce((sum, row) => sum + number(row.paid), 0) }
+      ? {
+        contractValue: realizationGroups.reduce((sum, group) => sum + group.contractValue, 0),
+        billed: realizationGroups.reduce((sum, group) => sum + group.billed, 0),
+        paid: realizationGroups.reduce((sum, group) => sum + group.paid, 0),
+        remaining: realizationGroups.reduce((sum, group) => sum + group.remaining, 0),
+      }
       : null
 
   return <div className={`workflow-page ${readOnly ? 'is-read-only' : ''}`}>
     <section className="workflow-heading"><div className="workflow-title-icon"><Icon size={21} /></div><div><p className="eyebrow">ALUR RAB &amp; REALISASI</p><h1>{meta.title}</h1><p>{meta.description}</p></div></section>
+    {saveStatus && <p className={`workflow-save-status is-${saveStatus.type}`} role={saveStatus.type === 'error' ? 'alert' : 'status'} aria-live="polite">{saveStatus.type === 'progress' && <span className="workflow-save-spinner" aria-hidden="true" />}{saveStatus.message}</p>}
     {(view === 'activities' || (view === 'components' && activityCatalog.length > 0))
       ? <div className="workflow-stepbar" aria-label="Tahapan RAB"><span className={!form.prk ? 'current' : ''}>1 PRK</span><i /><span className={form.prk && !form.workPackage ? 'current' : ''}>2 Kegiatan</span><i /><span className={form.workPackage && (!form.name || view === 'activities') ? 'current' : ''}>{view === 'activities' ? '3 Rekap komponen' : '3 Komponen pekerjaan'}</span><i /><span>4 Finalisasi PA</span><i /><span>5 Realisasi</span></div>
       : <div className="workflow-stepbar" aria-label="Tahapan RAB"><span className={view === 'materials' ? 'current' : ''}>1 Material</span><i /><span className={view === 'components' ? 'current' : ''}>2 Komponen</span><i /><span className={view === 'activities' ? 'current' : ''}>3 Kegiatan</span><i /><span className={view === 'paFinalization' ? 'current' : ''}>4 Finalisasi PA</span><i /><span className={view === 'realizations' ? 'current' : ''}>5 Realisasi</span></div>}
@@ -1682,17 +1874,23 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
         {view === 'components' && materials.length === 0 && components.length === 0 && <div className="workflow-hint">{activityCatalog.length ? 'Impor FORM MATERIAL & HARGA terlebih dahulu agar uraian dan harga dapat terisi otomatis.' : 'Isi master material terlebih dahulu. Harga material dan jasa tetap dapat diketik manual.'}</div>}
         {view === 'activities' && <div className="workflow-hint">Rekap RAB menampilkan data yang sudah tersimpan melalui menu Input RAB. Untuk menambah atau mengubah data, gunakan Input RAB.</div>}
         {view === 'materialRecap' && activities.length === 0 && <div className="workflow-hint">Buat RAB kegiatan terlebih dahulu. Kebutuhan material akan direkap dari komponen RAB.</div>}
-        {view === 'realizations' && activities.length === 0 && <div className="workflow-hint">Buat RAB kegiatan terlebih dahulu sebelum mencatat realisasi.</div>}
+        {view === 'realizations' && <div className="workflow-hint">{realizationActivities.length ? 'Pilih No. PRK terlebih dahulu, lalu cari kegiatan RAB.' : 'Belum ada Input RAB. Simpan komponen melalui menu Input RAB terlebih dahulu.'}</div>}
         {view !== 'activities' && <form className="workflow-form" onSubmit={submit}>
           <div className="workflow-fields">{formFields()}{view !== 'paFinalization' && field('notes', 'Catatan', { required: false, placeholder: 'Opsional' })}</div>
           {view === 'components' && form.name && <div className="workflow-tax-summary workflow-input-rab-tax workflow-rab-step-full"><div><span>Subtotal RAB</span><strong>{formatCurrency(inputRabSubtotal)}</strong></div><div><span>DPP (11/12)</span><strong>{formatCurrency(inputRabDpp)}</strong></div><div><span>PPN 12%</span><strong>{formatCurrency(inputRabPpn)}</strong></div><div className="workflow-tax-total"><span>TOTAL ANGGARAN — akan masuk kolom M</span><strong>{formatCurrency(inputRabTotalAnggaran)}</strong></div></div>}
-          {view !== 'paFinalization' && <div className={`workflow-form-footer ${view === 'components' ? 'workflow-rab-save-footer' : ''}`}><span>* Wajib diisi</span><div className="workflow-form-actions">{editingId && <button className="button button-secondary" type="button" onClick={() => { setForm({ ...EMPTY_FORM[view] }); setEditingId(''); setSaveStatus(null) }}><X size={14} />Batal edit</button>}<button className="button button-primary" type="submit" disabled={saving || ((view === 'materialRecap' || view === 'realizations') && activities.length === 0) || (view === 'components' && activityCatalog.length > 0 && (!form.prk || !form.workPackage || !form.name || activityLineItems.length === 0))}><Save size={15} />{saving ? 'Menyimpan...' : view === 'components' ? 'Simpan ke Google Sheets' : editingId ? 'Simpan perubahan' : 'Simpan data'}</button></div>{view === 'components' && saveStatus && <p className={`workflow-save-status is-${saveStatus.type}`} role={saveStatus.type === 'error' ? 'alert' : 'status'} aria-live="polite">{saveStatus.type === 'progress' && <span className="workflow-save-spinner" aria-hidden="true" />}{saveStatus.message}</p>}</div>}
+          {view !== 'paFinalization' && <div className={`workflow-form-footer ${view === 'components' ? 'workflow-rab-save-footer' : ''}`}><span>* Wajib diisi</span><div className="workflow-form-actions">{editingId && <button className="button button-secondary" type="button" disabled={saving} onClick={() => { setForm({ ...EMPTY_FORM[view] }); setEditingId(''); setSaveStatus(null) }}><X size={14} />Batal edit</button>}<button className="button button-primary" type="submit" disabled={saving || (view === 'materialRecap' && activities.length === 0) || (view === 'realizations' && realizationActivities.length === 0) || (view === 'components' && activityCatalog.length > 0 && (!form.prk || !form.workPackage || !form.name || activityLineItems.length === 0))}>{saving ? <><span className="workflow-save-spinner" aria-hidden="true" />Menyimpan...</> : <><Save size={15} />{view === 'components' ? 'Simpan ke Google Sheets' : editingId ? 'Simpan perubahan' : 'Simpan data'}</>}</button></div></div>}
         </form>}
       </section>
       {view !== 'components' && view !== 'activities' && <section className="workflow-summary panel">
         <span className="workflow-summary-icon"><Icon size={19} /></span>
-        <div><span>{view === 'materialRecap' ? 'Baris kebutuhan material' : `Total ${meta.title.toLowerCase()}`}</span><strong>{view === 'materialRecap' ? plannedMaterialRows.length : rows.length}</strong></div>
-        {totals && <div className="workflow-sum-money"><span>{totals.label}</span><strong>{formatCurrency(totals.value)}</strong></div>}
+        <div><span>{view === 'materialRecap' ? 'Baris kebutuhan material' : view === 'realizations' ? 'Kontrak tercatat' : `Total ${meta.title.toLowerCase()}`}</span><strong>{view === 'materialRecap' ? plannedMaterialRows.length : view === 'realizations' ? realizationGroups.length : rows.length}</strong></div>
+        {view === 'realizations' && totals && <>
+          <div className="workflow-sum-money"><span>Nilai kontrak</span><strong>{formatCurrency(totals.contractValue)}</strong></div>
+          <div className="workflow-sum-money"><span>Total terserap / tagihan</span><strong>{formatCurrency(totals.billed)}</strong></div>
+          <div className="workflow-sum-money"><span>Total dibayar kumulatif</span><strong>{formatCurrency(totals.paid)}</strong></div>
+          <div className="workflow-sum-money"><span>Sisa anggaran kontrak</span><strong>{formatCurrency(totals.remaining)}</strong></div>
+        </>}
+        {view !== 'realizations' && totals && <div className="workflow-sum-money"><span>{totals.label}</span><strong>{formatCurrency(totals.value)}</strong></div>}
         </section>}
     </div>
 
@@ -1714,11 +1912,11 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
     </section>}
 
     <section className="panel workflow-table-panel">
-      <div className="workflow-table-heading"><div><p className="eyebrow">DATA TERSIMPAN</p><h2>{view === 'materialRecap' ? 'Rencana dan pemakaian material' : meta.title}</h2></div>{(view === 'components' || view === 'activities') ? <div className="workflow-print-controls"><select aria-label={view === 'activities' ? 'Pilih kegiatan untuk dicetak' : 'Pilih komponen pekerjaan untuk dicetak'} value={printGroupKey} onChange={(event) => setPrintGroupKey(event.target.value)}><option value="">{view === 'activities' ? 'Pilih kegiatan' : 'Pilih komponen pekerjaan'}</option>{printGroups.map((group) => <option key={group.key} value={group.key}>{group.criteria ? `${group.criteria} | ` : ''}{group.activity}{group.prk ? ` | PRK ${group.prk}` : ''}</option>)}</select><button className="button button-secondary" type="button" disabled={!printableComponents.length} onClick={() => window.print()}><Printer size={15} /> Cetak RAB</button></div> : <span className="workflow-count">{view === 'materialRecap' ? plannedMaterialRows.length : rows.length} baris</span>}</div>
+      <div className="workflow-table-heading"><div><p className="eyebrow">DATA TERSIMPAN</p><h2>{view === 'materialRecap' ? 'Rencana dan pemakaian material' : meta.title}</h2></div>{(view === 'components' || view === 'activities') ? <div className="workflow-print-controls"><select aria-label={view === 'activities' ? 'Pilih kegiatan untuk dicetak' : 'Pilih komponen pekerjaan untuk dicetak'} value={printGroupKey} onChange={(event) => setPrintGroupKey(event.target.value)}><option value="">{view === 'activities' ? 'Pilih kegiatan' : 'Pilih komponen pekerjaan'}</option>{printGroups.map((group) => <option key={group.key} value={group.key}>{group.criteria ? `${group.criteria} | ` : ''}{group.activity}{group.prk ? ` | PRK ${group.prk}` : ''}</option>)}</select><button className="button button-secondary" type="button" disabled={!printableComponents.length} onClick={() => window.print()}><Printer size={15} /> Cetak RAB</button></div> : <span className="workflow-count">{view === 'materialRecap' ? plannedMaterialRows.length : view === 'realizations' ? realizationGroups.length : rows.length} {view === 'realizations' ? 'kontrak' : 'baris'}</span>}</div>
       <div className="workflow-toolbar"><label className="workflow-search"><Search size={15} /><input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Cari uraian, PRK, atau kegiatan" /></label>{view !== 'components' && <div className="workflow-segment" role="group" aria-label="Filter kriteria"><button className={criteriaFilter === 'all' ? 'selected' : ''} onClick={() => setCriteriaFilter('all')}>Semua</button><button className={criteriaFilter === 'TM' ? 'selected' : ''} onClick={() => setCriteriaFilter('TM')}>TM</button><button className={criteriaFilter === 'TR' ? 'selected' : ''} onClick={() => setCriteriaFilter('TR')}>TR</button></div>}</div>
-      <div className={`workflow-table-scroll ${view === 'components' || view === 'activities' ? 'workflow-component-table' : ''} ${view === 'activities' ? 'workflow-activities-table' : ''} ${view === 'materials' ? 'workflow-materials-freeze-scroll' : ''} ${view === 'activityCatalog' ? 'workflow-catalog-freeze-scroll' : ''}`}><table><thead>{view === 'components' ? <tr>{['No', 'Nama RAB', 'Jumlah Komponen', 'Subtotal (Rp)', 'Aksi'].map((header) => <th key={header}>{header}</th>)}</tr> : view === 'activities' ? <tr>{['No', 'Kegiatan', 'Jumlah RAB Komponen', 'Total Anggaran (Rp)', 'Aksi'].map((header) => <th key={header}>{header}</th>)}</tr> : <tr>{tableHeaders.map((header, index) => <th className={!header || header === 'Aksi' ? 'workflow-actions-heading' : undefined} key={`${header}-${index}`}>{header || <span className="sr-only">Aksi</span>}</th>)}</tr>}</thead><tbody>
+      <div className={`workflow-table-scroll ${view === 'components' || view === 'activities' ? 'workflow-component-table' : ''} ${view === 'activities' ? 'workflow-activities-table' : ''} ${view === 'realizations' ? 'workflow-realizations-table' : ''} ${view === 'materials' ? 'workflow-materials-freeze-scroll' : ''} ${view === 'activityCatalog' ? 'workflow-catalog-freeze-scroll' : ''}`}><table><thead>{view === 'components' ? <tr>{['No', 'Nama RAB', 'Jumlah Komponen', 'Subtotal (Rp)', 'Aksi'].map((header) => <th key={header}>{header}</th>)}</tr> : view === 'activities' ? <tr>{['No', 'Kegiatan', 'Jumlah RAB Komponen', 'Total Anggaran (Rp)', 'Aksi'].map((header) => <th key={header}>{header}</th>)}</tr> : <tr>{tableHeaders.map((header, index) => <th className={!header || header === 'Aksi' ? 'workflow-actions-heading' : undefined} key={`${header}-${index}`}>{header || <span className="sr-only">Aksi</span>}</th>)}</tr>}</thead><tbody>
         {view === 'materialRecap' ? tableRows() : tableRows()}
-        {((view === 'materialRecap' && filteredMaterialRows.length === 0) || (view === 'activities' && activitySavedGroups.length === 0) || (view === 'components' && componentDisplayGroups.length === 0) || (view !== 'components' && view !== 'materialRecap' && view !== 'activities' && filteredRows.length === 0)) && <tr><td colSpan={view === 'components' || view === 'activities' ? 5 : tableHeaders.length}><div className="workflow-empty"><Icon size={23} /><strong>Belum ada data</strong><span>{view === 'activities' && (form.prk || activityPrkFilter) ? 'Belum ada Rekap RAB tersimpan untuk PRK ini.' : 'Gunakan formulir di atas untuk memulai alur ini.'}</span></div></td></tr>}
+        {((view === 'materialRecap' && filteredMaterialRows.length === 0) || (view === 'activities' && activitySavedGroups.length === 0) || (view === 'components' && componentDisplayGroups.length === 0) || (view === 'realizations' && realizationGroups.length === 0) || (view !== 'components' && view !== 'materialRecap' && view !== 'activities' && view !== 'realizations' && filteredRows.length === 0)) && <tr><td colSpan={view === 'components' || view === 'activities' ? 5 : tableHeaders.length}><div className="workflow-empty"><Icon size={23} /><strong>Belum ada data</strong><span>{view === 'activities' && (form.prk || activityPrkFilter) ? 'Belum ada Rekap RAB tersimpan untuk PRK ini.' : 'Gunakan formulir di atas untuk memulai alur ini.'}</span></div></td></tr>}
       </tbody>{view === 'components' && componentDisplayGroups.length > 0 && <tfoot className="workflow-summary-footer"><tr><td colSpan="3">Subtotal</td><td className="workflow-total">{formatCurrency(componentTotals.total)}</td><td /></tr></tfoot>}{view === 'activities' && activitySavedGroups.length > 0 && <tfoot className="workflow-summary-footer"><tr><td colSpan="3">Total anggaran dari Input RAB</td><td className="workflow-total">{formatCurrency(activitySavedGroups.reduce((sum, group) => sum + group.totalAnggaran, 0))}</td><td /></tr></tfoot>}</table></div>
       {view === 'activities' && activitySavedGroups.length > 0 && <div className="workflow-tax-summary"><div><span>Subtotal</span><strong>{formatCurrency(activityTableTotals.total)}</strong></div><div><span>DPP (11/12)</span><strong>{formatCurrency(activityDpp)}</strong></div><div><span>PPN 12%</span><strong>{formatCurrency(activityPpn)}</strong></div><div className="workflow-tax-total"><span>TOTAL ANGGARAN</span><strong>{formatCurrency(activityTotalAnggaran)}</strong></div></div>}
     </section>
