@@ -25,7 +25,7 @@ const EMPTY_FORM = {
   activities: { rabNumber: '', rabTitle: '', paNumber: '', programRecordId: '', prk: '', position: '', criteria: 'TR', workPackage: '', year: new Date().getFullYear(), notes: '' },
   paFinalization: { recordId: '', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' },
   materialRecap: { activityId: '', materialId: '', quantity: '', date: new Date().toISOString().slice(0, 10), notes: '' },
-  realizations: { prk: '', activityId: '', date: new Date().toISOString().slice(0, 10), billed: '', paid: '', paymentStatus: 'BELUM LUNAS', notes: '' },
+  realizations: { prk: '', activityId: '', date: new Date().toISOString().slice(0, 10), billed: '', paymentDate: '', paid: '', paymentStatus: 'BELUM LUNAS', notes: '' },
 }
 
 const number = (value) => parseNumber(value)
@@ -636,6 +636,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
       activityId,
       date: billing.date,
       billed: billing.amount === '' ? '' : String(billing.amount),
+      paymentDate: '',
     }))
   }
 
@@ -647,6 +648,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
       activityId: '',
       date: '',
       billed: '',
+      paymentDate: '',
     }))
   }
 
@@ -967,6 +969,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
           ? number(billing.amount)
           : number(form.billed)
         record.paid = number(form.paid)
+        record.paymentDate = String(form.paymentDate || '')
         record.paymentStatus = String(form.paymentStatus || 'BELUM LUNAS')
         const activity = realizationActivityById.get(String(form.activityId))
         record.criteria = activity?.criteria || ''
@@ -1468,11 +1471,13 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
       {field('prk', 'No. PRK', { choices: realizationPrkChoices.map((prk) => ({ value: prk, label: prk })), onChange: updateRealizationPrk })}
       {field('activityId', 'Kegiatan RAB', { choices: activityGroupChoices.map((activity) => ({ value: activity.id, label: `${activity.criteria || '-'} | ${activity.workPackage ? `${activity.workPackage} — ` : ''}${activity.componentName || activity.name}` })), onChange: updateRealizationActivity, searchable: true })}
       {selectedRealizationContract && <div className="workflow-realization-contract workflow-rab-step-full"><div><span>Nilai kontrak</span><strong>{formatCurrency(selectedRealizationContract.contractValue)}</strong></div><div><span>Total dibayar</span><strong>{formatCurrency(number(selectedRealizationContract.paid))}</strong></div><div><span>Sisa kontrak</span><strong>{formatCurrency(Math.max(0, number(selectedRealizationContract.contractValue) - number(selectedRealizationContract.paid)))}</strong></div></div>}
-      {field('date', 'Tanggal tagihan / realisasi', { type: 'date' })}
+      {selectedRealizationContract && <div className="workflow-realization-contract workflow-rab-step-full"><div><span>Rencana tagih kontrak</span><strong>{selectedRealizationContract.plannedBilling || '-'}</strong></div><div><span>Nilai tagihan terjadwal bulan ini</span><strong>{selectedRealizationBillingIsScheduled ? formatCurrency(selectedRealizationBilling.amount) : 'Belum diatur'}</strong></div></div>}
+      {field('date', 'Tanggal tagihan', { type: 'date' })}
       {field('billed', 'Nilai tagihan (Rp)', { type: 'number', step: '1', placeholder: '0', value: selectedRealizationBillingIsScheduled ? String(selectedRealizationBilling.amount) : form.billed, readOnly: selectedRealizationBillingIsScheduled })}
       {selectedRealizationContract && form.date && !selectedRealizationBillingIsScheduled && <div className="workflow-hint workflow-rab-step-full" role="status">
-        Nominal tagihan untuk bulan ini belum ditemukan pada kontrak yang terhubung. Periksa kolom TAGIHAN BULANAN di Data Kontrak, lalu muat ulang data jika nilainya baru diubah di Google Sheets.
+        Nominal tagihan untuk bulan ini belum ditemukan pada kontrak yang terhubung. Periksa kolom TAGIHAN BULANAN di Data Kontrak, lalu muat ulang data jika nilainya baru diubah di Google Sheets. Nilai yang diisi di sini menjadi tagihan Realisasi saja, bukan tambahan proyeksi.
       </div>}
+      {field('paymentDate', 'Tanggal bayar', { type: 'date', required: number(form.paid) > 0 })}
       {field('paid', 'Nilai dibayar (Rp)', { type: 'number', step: '1', placeholder: '0', required: false })}
       {field('paymentStatus', 'Status pembayaran', { choices: [
         { value: 'BELUM LUNAS', label: 'BELUM LUNAS' },
@@ -1611,7 +1616,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
           <td><span className={`workflow-payment-status ${group.latestStatus === 'LUNAS' ? 'is-paid' : 'is-unpaid'}`}>{group.latestStatus || 'BELUM LUNAS'}</span></td>
           <td><button className="workflow-expand-button" type="button" aria-expanded={isExpanded} onClick={() => setExpandedRealizationGroup(isExpanded ? '' : group.key)}><ChevronDown size={14} />{isExpanded ? 'Tutup' : `${group.entries.length} rincian`}</button></td>
         </tr>,
-        ...(isExpanded ? [<tr className="workflow-component-detail-row" key={`${group.key}-details`}><td colSpan="10"><div className="workflow-component-details"><table><thead><tr><th>Tanggal tagihan / realisasi</th><th>Kegiatan</th><th>Nilai tagihan</th><th>Nilai dibayar</th><th>Status pembayaran</th><th>Catatan</th><th>Aksi</th></tr></thead><tbody>{group.entries.map(({ row, activity }) => <tr key={row.id}><td>{row.date || '-'}</td><td>{activity?.componentName || activity?.name || row.activityName || '-'}</td><td>{formatCurrency(row.billed)}</td><td>{formatCurrency(row.paid)}</td><td><span className={`workflow-payment-status ${row.paymentStatus === 'LUNAS' ? 'is-paid' : 'is-unpaid'}`}>{row.paymentStatus || 'BELUM LUNAS'}</span></td><td>{row.notes || '-'}</td>{rowActions(row, 'realisasi')}</tr>)}</tbody><tfoot><tr><td colSpan="2">Total kumulatif</td><td>{formatCurrency(group.billed)}</td><td>{formatCurrency(group.paid)}</td><td colSpan="3">Sisa kontrak {formatCurrency(group.remaining)}</td></tr></tfoot></table></div></td></tr>] : []),
+        ...(isExpanded ? [<tr className="workflow-component-detail-row" key={`${group.key}-details`}><td colSpan="10"><div className="workflow-component-details"><table><thead><tr><th>Tanggal tagihan</th><th>Tanggal bayar</th><th>Kegiatan</th><th>Nilai tagihan</th><th>Nilai dibayar</th><th>Status pembayaran</th><th>Catatan</th><th>Aksi</th></tr></thead><tbody>{group.entries.map(({ row, activity }) => <tr key={row.id}><td>{row.date || '-'}</td><td>{row.paymentDate || '-'}</td><td>{activity?.componentName || activity?.name || row.activityName || '-'}</td><td>{formatCurrency(row.billed)}</td><td>{formatCurrency(row.paid)}</td><td><span className={`workflow-payment-status ${row.paymentStatus === 'LUNAS' ? 'is-paid' : 'is-unpaid'}`}>{row.paymentStatus || 'BELUM LUNAS'}</span></td><td>{row.notes || '-'}</td>{rowActions(row, 'realisasi')}</tr>)}</tbody><tfoot><tr><td colSpan="3">Total kumulatif</td><td>{formatCurrency(group.billed)}</td><td>{formatCurrency(group.paid)}</td><td colSpan="3">Sisa kontrak {formatCurrency(group.remaining)}</td></tr></tfoot></table></div></td></tr>] : []),
       ]
     })
     if (view === 'components') {
