@@ -779,32 +779,32 @@ test('syncs realization billing and payment totals to matching RABData rows', as
   vm.runInNewContext(script, context)
   context.authorize_ = () => ({ ok: true, user: { id: 'test-admin', username: 'admin', role: 'admin', name: 'Test Admin' } })
   const post = (payload) => JSON.parse(context.doPost({ postData: { contents: JSON.stringify(payload) } }).text)
-  const realization = (id, date, billed, paid, paymentStatus, programRecordId = '') => ({
-    id, activityId: programRecordId ? 'input-rab:activity-1' : 'activity-1', programRecordId, date, billed, paid, paymentStatus,
+  const realization = (id, date, billed, paid, paymentStatus, programRecordId = '', paymentDate = '') => ({
+    id, activityId: programRecordId ? 'input-rab:activity-1' : 'activity-1', programRecordId, date, billed, paid, paymentStatus, paymentDate,
   })
 
   const saved = post({ action: 'saveWorkflow', collection: 'realizations', records: [
-    realization('real-1', '2026-09-27', 100, 40, 'BELUM LUNAS'),
-    realization('real-2', '2026-09-28', 200, 80, 'LUNAS', 'record-1'),
+    realization('real-1', '2026-09-27', 100, 40, 'BELUM LUNAS', '', '2026-10-01'),
+    realization('real-2', '2026-09-28', 200, 80, 'LUNAS', 'record-1', '2026-10-03'),
   ] })
   assert.equal(saved.ok, true, saved.error)
   assert.equal(dataSheet.values[1][dataHeaders.indexOf('TAGIHAN')], 300)
   assert.equal(dataSheet.values[1][dataHeaders.indexOf('TOTAL BAYAR')], 120)
   assert.equal(dataSheet.values[1][dataHeaders.indexOf('PROGRESS')], 'LUNAS')
-  assert.equal(dataSheet.values[1][dataHeaders.indexOf('TANGGAL BAYAR')], '2026-09-28')
+  assert.equal(dataSheet.values[1][dataHeaders.indexOf('TANGGAL BAYAR')], '2026-10-03')
   assert.equal(saved.updatedRecords[0].billed, 300)
   assert.equal(saved.updatedRecords[0].paid, 120)
   assert.equal(saved.updatedRecords[0].progress, 'LUNAS')
-  assert.equal(saved.updatedRecords[0].paymentDate, '2026-09-28')
+  assert.equal(saved.updatedRecords[0].paymentDate, '2026-10-03')
 
   const edited = post({ action: 'saveWorkflow', collection: 'realizations', records: [
-    realization('real-2', '2026-09-28', 250, 100, 'BELUM LUNAS', 'record-1'),
+    realization('real-2', '2026-09-28', 250, 100, 'BELUM LUNAS', 'record-1', '2026-10-04'),
   ] })
   assert.equal(edited.ok, true, edited.error)
   assert.equal(dataSheet.values[1][dataHeaders.indexOf('TAGIHAN')], 250)
   assert.equal(dataSheet.values[1][dataHeaders.indexOf('TOTAL BAYAR')], 100)
   assert.equal(dataSheet.values[1][dataHeaders.indexOf('PROGRESS')], 'BELUM LUNAS')
-  assert.equal(dataSheet.values[1][dataHeaders.indexOf('TANGGAL BAYAR')], '2026-09-28')
+  assert.equal(dataSheet.values[1][dataHeaders.indexOf('TANGGAL BAYAR')], '2026-10-04')
 
   const deleted = post({ action: 'saveWorkflow', collection: 'realizations', records: [] })
   assert.equal(deleted.ok, true, deleted.error)

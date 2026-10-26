@@ -863,7 +863,7 @@ function syncRealizationTotals_(previousRecords, nextRecords) {
     .filter(Boolean).map(String))
   if (!affectedRecordIds.size) return []
 
-  const totals = new Map([...affectedRecordIds].map((id) => [id, { billed: 0, paid: 0, latest: null }]))
+  const totals = new Map([...affectedRecordIds].map((id) => [id, { billed: 0, paid: 0, latest: null, latestPaymentDate: '' }]))
   nextRecords.forEach((item) => {
     const total = totals.get(String(resolveRecordId(item) || ''))
     if (!total) return
@@ -874,6 +874,10 @@ function syncRealizationTotals_(previousRecords, nextRecords) {
     if (date && (!total.latest || date > total.latest.date
       || (date === total.latest.date && createdAt > total.latest.createdAt))) {
       total.latest = { date, createdAt, status: String(item.paymentStatus || '') }
+    }
+    const paymentDate = String(item.paymentDate || '')
+    if ((Number(item.paid) || 0) > 0 && paymentDate > total.latestPaymentDate) {
+      total.latestPaymentDate = paymentDate
     }
   })
 
@@ -890,7 +894,9 @@ function syncRealizationTotals_(previousRecords, nextRecords) {
       dataSheet.getRange(rowNumber, billedIndex + 1).setValue(total.billed)
       dataSheet.getRange(rowNumber, paidIndex + 1).setValue(total.paid)
       dataSheet.getRange(rowNumber, progressIndex + 1).setValue(total.latest?.status || '')
-      dataSheet.getRange(rowNumber, paymentDateIndex + 1).setValue(total.latest?.date || '')
+      dataSheet.getRange(rowNumber, paymentDateIndex + 1).setValue(
+        total.paid > 0 ? total.latestPaymentDate || previousPaymentDate : '',
+      )
     } catch (error) {
       dataSheet.getRange(rowNumber, billedIndex + 1).setValue(previousBilled)
       dataSheet.getRange(rowNumber, paidIndex + 1).setValue(previousPaid)
@@ -903,7 +909,7 @@ function syncRealizationTotals_(previousRecords, nextRecords) {
       billed: total.billed,
       paid: total.paid,
       progress: total.latest?.status || '',
-      paymentDate: total.latest?.date || '',
+      paymentDate: total.paid > 0 ? total.latestPaymentDate || String(previousPaymentDate || '') : '',
     })
   })
   return updates
