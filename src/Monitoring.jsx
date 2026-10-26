@@ -5,7 +5,7 @@ import {
   Search, ShieldCheck, Users, X, Zap,
 } from 'lucide-react'
 import {
-  Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Bar, BarChart, CartesianGrid, Cell, ComposedChart, Legend, Line, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import { importMonitoringWorkbook, MONITORING_MODULES, normalizeMonitoringHeader } from './lib/monitoringWorkbook.js'
 import { readRabMaterialFile, summarizeRabMaterials } from './lib/rabDatabase.js'
@@ -43,7 +43,7 @@ const MODULE_FIELDS = {
 const FILTER_FIELDS = {
   spb: ['PROGRES', 'STATUS SPB', 'POS'],
   stock: ['KRITERIA MATERIAL', 'STATUS', 'NAMA MATERIAL'],
-  load: ['UP3', 'GARDU INDUK', 'PENYULANG'],
+  load: ['UP3', 'GARDU INDUK', 'PENYULANG', 'KARAKTERISTIK BEBAN'],
   rabDatabase: ['PRK', 'ID RAB'],
   tibet: ['NOMOR KR', 'VENDOR'],
   vendor: ['NOMOR KONTRAK', 'NOMOR PK', 'NOMOR WO', 'STATUS KONTRAK'],
@@ -51,14 +51,15 @@ const FILTER_FIELDS = {
 }
 
 const KPI_FIELDS = {
-  spb: [['NO SPB', 'Jumlah baris SPB'], ['VOL SPB', 'Volume SPB'], ['VOL DTG', 'Sudah datang'], ['VOL BLM DTG', 'Belum datang']],
+  spb: [['VOL SPB', 'Data (Volume SPB)'], ['VOL DTG', 'Sudah datang'], ['VOL BLM DTG', 'Belum datang'], ['PROGRES PERSENTASE', 'Progres kedatangan']],
   stock: [['NORMALISASI', 'Material terdaftar'], ['VOL 61', 'Stok POS 61'], ['VOL 62', 'Stok POS 62'], ['VOL GUDANG', 'Stok gudang']],
   load: [['PENYULANG', 'Penyulang'], ['BEBAN SIANG', 'Beban siang'], ['BEBAN MALAM', 'Beban malam'], ['% PEMBEBANAN PENYULANG', 'Rata-rata beban']],
   rabDatabase: [['ID RAB', 'ID RAB'], ['PRK', 'PRK'], ['URAIAN MATERIAL', 'Baris material'], ['VOLUME', 'Total volume']],
-  tibet: [['NOMOR KR', 'Nomor KR'], ['VENDOR', 'Vendor'], ['VOL KR', 'Volume KR'], ['VOL PASANG', 'Volume terpasang']],
-  vendor: [['NOMOR KONTRAK', 'Kontrak vendor'], ['NILAI KONTRAK', 'Nilai kontrak'], ['REALISASI (Rp)', 'Realisasi'], ['SISA KONTRAK', 'Sisa kontrak']],
-  customers: [['NO PK', 'Pelanggan / PK'], ['ULP', 'ULP'], ['DAYA', 'Total daya'], ['PROGRESS', 'Progres selesai']],
+  tibet: [['NOMOR KR', 'Nomor KR'], ['NO PK', 'Jumlah Nomor PK'], ['VOL PK', 'Total Vol PK'], ['VOL PASANG', 'Volume terpasang']],
+  vendor: [['NOMOR KONTRAK', 'Kontrak vendor'], ['VENDOR', 'Nama Vendor'], ['NILAI KONTRAK', 'Nilai kontrak'], ['REALISASI (Rp)', 'Total realisasi'], ['SISA KONTRAK', 'Sisa kontrak']],
+  customers: [['NAMA', 'Pelanggan terdata'], ['PK', 'PK sudah'], ['ULP', 'ULP'], ['DAYA', 'Total daya'], ['PROGRESS', 'Sudah nyala']],
 }
+const CHART_COLORS = ['#0878b9', '#24bfd3', '#79b86a', '#edab54', '#8172c5', '#e47768', '#4a9a91', '#9b7b5a']
 
 function readStoredDatasets() {
   try {
@@ -125,13 +126,16 @@ function formatMetric(value, header) {
   return NUMBER_FORMAT.format(value)
 }
 
-function buildMetrics(moduleId, dataset, rows) {
+function buildMetrics(moduleId, dataset, rows, selectedFilters = {}) {
   const headers = dataset?.headers || []
   return KPI_FIELDS[moduleId].map(([field, label]) => {
     const index = getColumnIndex(headers, field)
     let value = 0
     if (moduleId === 'spb') {
-      value = field === 'NO SPB' ? rows.filter((row) => cell(row, index)).length
+      value = field === 'PROGRES PERSENTASE'
+        ? (sumColumn(rows, getColumnIndex(headers, 'VOL SPB')) > 0
+          ? (sumColumn(rows, getColumnIndex(headers, 'VOL DTG')) / sumColumn(rows, getColumnIndex(headers, 'VOL SPB'))) * 100
+          : 0)
         : field === 'VOL BLM DTG'
           ? Math.max(0, sumColumn(rows, getColumnIndex(headers, 'VOL SPB')) - sumColumn(rows, getColumnIndex(headers, 'VOL DTG')))
           : sumColumn(rows, index)
@@ -144,20 +148,36 @@ function buildMetrics(moduleId, dataset, rows) {
         : field === 'URAIAN MATERIAL' ? rows.filter((row) => cell(row, index)).length
           : sumColumn(rows, index)
     } else if (moduleId === 'tibet') {
-      value = field === 'NOMOR KR' || field === 'VENDOR' ? uniqueCount(rows, index) : sumColumn(rows, index)
+      value = field === 'NOMOR KR' || field === 'NO PK' ? uniqueCount(rows, index) : sumColumn(rows, index)
     } else if (moduleId === 'vendor') {
-      value = field === 'NOMOR KONTRAK' ? uniqueCount(rows, index) : sumColumn(rows, index)
+      if (field === 'NOMOR KONTRAK') value = uniqueCount(rows, index)
+      else if (field === 'VENDOR') {
+        const selectedContract = selectedFilters['NOMOR KONTRAK']
+        if (!selectedContract) value = 'Semua Vendor'
+        else {
+          const contractRows = dataset.rows.filter((row) => String(cell(row, getColumnIndex(headers, 'NOMOR KONTRAK'))).trim() === selectedContract)
+          const vendors = [...new Set(contractRows.map((row) => String(cell(row, index)).trim()).filter(Boolean))]
+          value = vendors.join(', ') || 'Vendor tidak ditemukan'
+        }
+      } else value = sumColumn(rows, index)
     } else if (moduleId === 'customers') {
-      value = field === 'NO PK' ? rows.filter((row) => cell(row, index)).length
-        : field === 'ULP' ? uniqueCount(rows, index)
-          : field === 'DAYA' ? sumColumn(rows, index)
-            : rows.filter((row) => /selesai|lunas|100%/i.test(String(cell(row, index)))).length
+      value = field === 'NAMA' ? uniqueCount(rows, index)
+        : field === 'PK' ? rows.filter((row) => String(cell(row, index)).trim().toLocaleUpperCase('id') === 'SUDAH').length
+          : field === 'ULP' ? uniqueCount(rows, index)
+            : field === 'DAYA' ? sumColumn(rows, index)
+              : rows.filter((row) => String(cell(row, index)).trim().toLocaleUpperCase('id') === 'NYALA').length
     }
-    return { label, value: formatMetric(value, field), rawValue: value }
+    const isText = moduleId === 'vendor' && field === 'VENDOR'
+    const isContractCount = moduleId === 'vendor' && field === 'NOMOR KONTRAK'
+    const formattedValue = isText ? value
+      : isContractCount ? NUMBER_FORMAT.format(value)
+      : moduleId === 'spb' && field === 'PROGRES PERSENTASE' ? `${NUMBER_FORMAT.format(value)}%`
+        : formatMetric(value, field)
+    return { label, value: formattedValue, rawValue: value, isText }
   })
 }
 
-function buildChartData(moduleId, dataset, rows) {
+function buildChartData(moduleId, dataset, rows, selectedFilters = {}) {
   const headers = dataset?.headers || []
   const groupBy = (groupField, measureFields, limit = 8) => {
     const groupIndex = getColumnIndex(headers, groupField)
@@ -175,10 +195,37 @@ function buildChartData(moduleId, dataset, rows) {
     }).slice(0, limit)
   }
 
-  if (moduleId === 'spb') return {
-    data: groupBy('POS', ['VOL SPB', 'VOL DTG'], 8),
-    bars: [['VOL SPB', 'Volume SPB', '#0782bd'], ['VOL DTG', 'Volume datang', '#24bfd3']],
-    label: 'Volume SPB dan kedatangan per POS',
+  if (moduleId === 'spb') {
+    const posIndex = getColumnIndex(headers, 'POS')
+    const spbIndex = getColumnIndex(headers, 'VOL SPB')
+    const arrivedIndex = getColumnIndex(headers, 'VOL DTG')
+    const notArrivedIndex = getColumnIndex(headers, 'VOL BLM DTG')
+    const grouped = new Map()
+    rows.forEach((row) => {
+      const name = String(cell(row, posIndex)).trim() || 'Tidak diketahui'
+      const item = grouped.get(name) || { name, 'VOL SPB': 0, 'VOL DTG': 0, 'VOL BLM DTG': 0 }
+      const spbVolume = numberValue(cell(row, spbIndex))
+      const arrivedVolume = numberValue(cell(row, arrivedIndex))
+      item['VOL SPB'] += spbVolume
+      item['VOL DTG'] += arrivedVolume
+      item['VOL BLM DTG'] += notArrivedIndex >= 0 && cell(row, notArrivedIndex) !== ''
+        ? numberValue(cell(row, notArrivedIndex))
+        : Math.max(0, spbVolume - arrivedVolume)
+      grouped.set(name, item)
+    })
+    const data = [...grouped.values()].map((item) => ({
+      ...item,
+      'PROGRES %': item['VOL SPB'] > 0 ? item['VOL DTG'] / item['VOL SPB'] * 100 : 0,
+    })).sort((left, right) => left.name.localeCompare(right.name, 'id', { numeric: true }))
+    return {
+      data,
+      layout: 'vertical',
+      categoryAxisWidth: 85,
+      dynamicHeight: Math.max(260, data.length * 46),
+      percentLine: 'PROGRES %',
+      bars: [['VOL SPB', 'Data (Vol SPB)', '#0782bd'], ['VOL DTG', 'Sudah datang', '#24bfd3'], ['VOL BLM DTG', 'Belum datang', '#edab54']],
+      label: 'Data SPB, kedatangan, dan progres per POS',
+    }
   }
   if (moduleId === 'stock') {
     const nameIndex = getColumnIndex(headers, ['NAMA MATERIAL', 'NAMA BARANG'])
@@ -194,6 +241,18 @@ function buildChartData(moduleId, dataset, rows) {
     return { data, layout: 'vertical', categoryAxisWidth: 190, bars: [['VOL 61', 'POS 61', '#0782bd'], ['VOL 62', 'POS 62', '#24bfd3'], ['VOL GUDANG', 'Gudang', '#79b86a']], label: emergencyRows.length ? '5 material darurat dengan volume stok terbesar' : 'Perbandingan stok pada 8 material teratas' }
   }
   if (moduleId === 'load') {
+    const characteristic = selectedFilters['KARAKTERISTIK BEBAN']
+    if (characteristic) {
+      const field = characteristic === 'SIANG' ? 'BEBAN SIANG' : 'BEBAN MALAM'
+      return {
+        data: groupBy('PENYULANG', [field], 12),
+        layout: 'vertical',
+        categoryAxisWidth: 170,
+        dynamicHeight: Math.max(280, Math.min(12, rows.length) * 40),
+        bars: [[field, `Beban ${characteristic.toLocaleLowerCase('id')}`, '#0878b9']],
+        label: `Karakteristik beban ${characteristic.toLocaleLowerCase('id')} per penyulang`,
+      }
+    }
     const data = MONTHS.map((month) => ({
       name: month.slice(0, 3),
       'BEBAN SIANG': averageColumn(rows, getColumnIndex(headers, month)),
@@ -210,10 +269,31 @@ function buildChartData(moduleId, dataset, rows) {
     bars: [['VOL KR', 'Volume KR', '#0782bd'], ['VOL PK', 'Volume PK', '#24bfd3'], ['VOL PASANG', 'Terpasang', '#79b86a']],
     label: 'Volume kontrak dan pemasangan per vendor',
   }
-  if (moduleId === 'vendor') return {
-    data: groupBy('VENDOR', ['NILAI KONTRAK', 'REALISASI (Rp)'], 8),
-    bars: [['NILAI KONTRAK', 'Nilai kontrak', '#0782bd'], ['REALISASI (Rp)', 'Realisasi', '#24bfd3']],
-    label: '8 vendor dengan nilai kontrak terbesar',
+  if (moduleId === 'vendor') {
+    const materialIndex = getColumnIndex(headers, 'NAMA MATERIAL')
+    const quantityIndex = getColumnIndex(headers, 'JUMLAH MATERIAL')
+    const materialGroups = new Map()
+    rows.forEach((row) => {
+      const names = String(cell(row, materialIndex)).split(/\r?\n/)
+      const quantities = String(cell(row, quantityIndex)).split(/\r?\n/)
+      names.forEach((name, index) => {
+        const material = name.trim()
+        if (!material) return
+        const item = materialGroups.get(material) || { name: material, 'Volume Material': 0 }
+        item['Volume Material'] += numberValue(quantities[index])
+        materialGroups.set(material, item)
+      })
+    })
+    const data = [...materialGroups.values()].sort((left, right) => right['Volume Material'] - left['Volume Material'])
+    return {
+      data,
+      layout: 'vertical',
+      categoryAxisWidth: 200,
+      dynamicHeight: Math.max(300, data.length * 36),
+      scrollable: true,
+      bars: [['Volume Material', 'Volume Material', '#0878b9']],
+      label: 'Rekap Semua Material dan Volume',
+    }
   }
   const materialColumns = headers.map((header, index) => ({ header, index }))
     .filter(({ index }) => index >= 11 && !['PASCA BAYAR', 'PRA BAYAR'].includes(normalizeMonitoringHeader(headers[index])))
@@ -239,6 +319,48 @@ function buildChartData(moduleId, dataset, rows) {
     bars: [['Jumlah pelanggan', 'Jumlah pelanggan', '#0782bd']],
     label: 'Jumlah pelanggan berdasarkan progres',
   }
+}
+
+function buildVendorValueBreakdown(headers, rows, selectedContract) {
+  const contractIndex = getColumnIndex(headers, 'NOMOR KONTRAK')
+  const values = { contract: 0, pk: 0, realization: 0, remaining: 0 }
+  let activeContract = ''
+  rows.forEach((row) => {
+    const rowContract = String(cell(row, contractIndex)).trim()
+    if (rowContract) activeContract = rowContract
+    if (selectedContract && activeContract !== selectedContract) return
+    values.contract += numberValue(cell(row, getColumnIndex(headers, 'NILAI KONTRAK')))
+    values.pk += numberValue(cell(row, getColumnIndex(headers, 'NILAI PK')))
+    values.realization += numberValue(cell(row, getColumnIndex(headers, 'REALISASI (Rp)')))
+    values.remaining += numberValue(cell(row, getColumnIndex(headers, 'SISA KONTRAK')))
+  })
+  return [
+    { name: 'Nilai PK', value: values.pk, color: CHART_COLORS[0] },
+    { name: 'Realisasi', value: values.realization, color: CHART_COLORS[1] },
+    { name: 'Sisa Kontrak', value: values.remaining, color: CHART_COLORS[2] },
+  ].map((item) => ({
+    ...item,
+    percentage: values.contract > 0 ? item.value / values.contract * 100 : 0,
+    contractValue: values.contract,
+  }))
+}
+
+function summarizeRabRowsById(rows) {
+  const grouped = new Map()
+  rows.forEach((row) => {
+    const item = {
+      id: String(cell(row, 1)).trim(),
+      prk: String(cell(row, 2)).trim(),
+      material: String(cell(row, 7)).trim(),
+      type: String(cell(row, 9)).trim() || 'LAINNYA',
+    }
+    const key = JSON.stringify([item.id, item.prk, item.material, item.type])
+    const summary = grouped.get(key) || { ...item, rowCount: 0, volume: 0 }
+    summary.rowCount += 1
+    summary.volume += numberValue(cell(row, 8))
+    grouped.set(key, summary)
+  })
+  return [...grouped.values()].sort((left, right) => right.volume - left.volume)
 }
 
 function getFilterOptions(dataset, field) {
@@ -277,16 +399,18 @@ function MonitoringChart({ chart }) {
       {visibleLines.map((line, index) => <tspan key={`${index}-${line}`} x="-8" dy={index === 0 ? firstLineOffset : 11}>{line}</tspan>)}
     </text></g>
   }
+  const Chart = chart.percentLine ? ComposedChart : BarChart
   return <ResponsiveContainer width="100%" height="100%">
-    <BarChart data={chart.data} layout={horizontal ? 'vertical' : 'horizontal'} margin={{ top: 8, right: 14, left: 0, bottom: 0 }}>
+    <Chart data={chart.data} layout={horizontal ? 'vertical' : 'horizontal'} margin={{ top: 8, right: chart.percentLine ? 24 : 14, left: 0, bottom: 0 }}>
       <CartesianGrid stroke="#edf1f6" vertical={false} />
       {horizontal
-        ? <><XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: '#8793a6', fontSize: 9 }} /><YAxis type="category" dataKey="name" axisLine={false} tickLine={false} tick={renderCategoryTick} width={chart.categoryAxisWidth || 170} interval={0} /></>
+        ? <><XAxis xAxisId="volume" type="number" axisLine={false} tickLine={false} tick={{ fill: '#8793a6', fontSize: 9 }} /><YAxis type="category" dataKey="name" axisLine={false} tickLine={false} tick={renderCategoryTick} width={chart.categoryAxisWidth || 170} interval={0} />{chart.percentLine && <XAxis xAxisId="percent" orientation="top" type="number" domain={[0, 100]} tickFormatter={(value) => `${value}%`} axisLine={false} tickLine={false} tick={{ fill: '#b28335', fontSize: 9 }} />}</>
         : <><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#718098', fontSize: 10 }} interval={0} angle={chart.data.length > 6 ? -18 : 0} textAnchor={chart.data.length > 6 ? 'end' : 'middle'} height={chart.data.length > 6 ? 48 : 30} /><YAxis axisLine={false} tickLine={false} tick={{ fill: '#8793a6', fontSize: 9 }} width={48} /></>}
-      <Tooltip formatter={(value, name) => [NUMBER_FORMAT.format(value), name]} contentStyle={{ border: '1px solid #dce5ef', borderRadius: 6, fontSize: 11 }} />
+      <Tooltip formatter={(value, name) => [name === 'Progres kedatangan' ? `${NUMBER_FORMAT.format(value)}%` : NUMBER_FORMAT.format(value), name]} contentStyle={{ border: '1px solid #dce5ef', borderRadius: 6, fontSize: 11 }} />
       {chart.bars.length > 1 && <Legend wrapperStyle={{ fontSize: 10 }} />}
-      {chart.bars.map(([field, label, color]) => <Bar key={field} dataKey={field} name={label} fill={color} radius={[3, 3, 0, 0]} maxBarSize={30} />)}
-    </BarChart>
+      {chart.bars.map(([field, label, color]) => <Bar key={field} xAxisId={horizontal ? 'volume' : undefined} dataKey={field} name={label} fill={color} radius={[3, 3, 0, 0]} maxBarSize={30} />)}
+      {chart.percentLine && <Line xAxisId={horizontal ? 'percent' : undefined} type="monotone" dataKey={chart.percentLine} name="Progres kedatangan" stroke="#edab54" strokeWidth={2.5} dot={{ r: 3 }} />}
+    </Chart>
   </ResponsiveContainer>
 }
 
@@ -314,6 +438,11 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onSav
   const [rabRekapVisible, setRabRekapVisible] = useState(false)
   const [rabRekapId, setRabRekapId] = useState('')
   const [rabRekapPrk, setRabRekapPrk] = useState('')
+  const [rabSelectedId, setRabSelectedId] = useState('')
+  const [rabIdSearch, setRabIdSearch] = useState('')
+  const [rabRecapPrk, setRabRecapPrk] = useState('')
+  const [rabMaterialFilter, setRabMaterialFilter] = useState('')
+  const [rabTypeFilter, setRabTypeFilter] = useState('')
   const [cloudLoading, setCloudLoading] = useState(true)
   const [cloudSaving, setCloudSaving] = useState(false)
   const [needsCloudMigration, setNeedsCloudMigration] = useState(false)
@@ -332,13 +461,21 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onSav
   const filteredRows = useMemo(() => {
     if (!dataset) return []
     const term = search.trim().toLocaleLowerCase('id')
+    let activeContract = ''
     return dataset.rows.filter((row) => {
+      const rowContract = String(cell(row, getColumnIndex(headers, 'NOMOR KONTRAK'))).trim()
+      if (rowContract) activeContract = rowContract
       for (const field of filterFields) {
         const selected = selectedFilters[field]
         if (!selected) continue
         if (field === 'MATERIAL') {
           const materialIndex = getColumnIndex(headers, selected)
           if (numberValue(cell(row, materialIndex)) === 0) return false
+        } else if (field === 'NOMOR KONTRAK' && module.id === 'vendor') {
+          if (activeContract !== selected) return false
+        } else if (field === 'KARAKTERISTIK BEBAN') {
+          const index = getColumnIndex(headers, selected === 'SIANG' ? 'BEBAN SIANG' : 'BEBAN MALAM')
+          if (!String(cell(row, index)).trim() || numberValue(cell(row, index)) === 0) return false
         } else {
           const index = getColumnIndex(headers, field)
           if (String(cell(row, index)).trim() !== selected) return false
@@ -346,12 +483,13 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onSav
       }
       return !term || row.some((value) => String(value ?? '').toLocaleLowerCase('id').includes(term))
     })
-  }, [dataset, filterFields, headers, search, selectedFilters])
+  }, [dataset, filterFields, headers, module.id, search, selectedFilters])
   const optionsByField = useMemo(() => Object.fromEntries(filterFields.map((field) => [field, field === 'MATERIAL'
     ? headers.slice(11, 44).filter((header) => header.trim())
+    : field === 'KARAKTERISTIK BEBAN' ? ['SIANG', 'MALAM']
     : getFilterOptions(dataset, field)])), [dataset, filterFields, headers])
-  const metrics = useMemo(() => buildMetrics(module.id, dataset, filteredRows), [dataset, filteredRows, module.id])
-  const chart = useMemo(() => buildChartData(module.id, dataset, filteredRows), [dataset, filteredRows, module.id])
+  const metrics = useMemo(() => buildMetrics(module.id, dataset, filteredRows, selectedFilters), [dataset, filteredRows, module.id, selectedFilters])
+  const chart = useMemo(() => buildChartData(module.id, dataset, filteredRows, selectedFilters), [dataset, filteredRows, module.id, selectedFilters])
   const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE))
   const currentPage = Math.min(page, pageCount)
   const visibleRows = filteredRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
@@ -363,10 +501,30 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onSav
   const rabDatabaseRows = datasets.rabDatabase?.rows || EMPTY_ROWS
   const rabPrkOptions = useMemo(() => [...new Set(rabDatabaseRows.map((row) => String(cell(row, 2)).trim()).filter(Boolean))].sort(), [rabDatabaseRows])
   const rabIdOptions = useMemo(() => [...new Set(rabDatabaseRows.map((row) => String(cell(row, 1)).trim()).filter(Boolean))].sort(), [rabDatabaseRows])
+  const rabIdSearchResults = useMemo(() => rabIdOptions.filter((id) => !rabIdSearch || id.toLocaleLowerCase('id').includes(rabIdSearch.trim().toLocaleLowerCase('id'))), [rabIdOptions, rabIdSearch])
+  const rabSelectedRows = useMemo(() => rabSelectedId
+    ? rabDatabaseRows.filter((row) => String(cell(row, 1)).trim() === rabSelectedId)
+    : [], [rabDatabaseRows, rabSelectedId])
   const rabRekapRows = useMemo(() => rabDatabaseRows.filter((row) =>
     (!rabRekapPrk || String(cell(row, 2)).trim() === rabRekapPrk)
     && (!rabRekapId || String(cell(row, 1)).trim() === rabRekapId)), [rabDatabaseRows, rabRekapId, rabRekapPrk])
   const rabSummary = useMemo(() => summarizeRabMaterials(rabRekapRows), [rabRekapRows])
+  const rabIdRecapRows = useMemo(() => rabRekapRows.filter((row) =>
+    !rabIdSearch || String(cell(row, 1)).toLocaleLowerCase('id').includes(rabIdSearch.trim().toLocaleLowerCase('id'))), [rabIdSearch, rabRekapRows])
+  const rabIdRecapSummary = useMemo(() => summarizeRabRowsById(rabIdRecapRows), [rabIdRecapRows])
+  const rabPrkRows = useMemo(() => rabDatabaseRows.filter((row) =>
+    (!rabRecapPrk || String(cell(row, 2)).trim() === rabRecapPrk)
+    && (!rabMaterialFilter || String(cell(row, 7)).trim() === rabMaterialFilter)
+    && (!rabTypeFilter || String(cell(row, 9)).trim() === rabTypeFilter)), [rabDatabaseRows, rabMaterialFilter, rabRecapPrk, rabTypeFilter])
+  const rabPrkSummary = useMemo(() => summarizeRabMaterials(rabPrkRows), [rabPrkRows])
+  const rabSelectedSummary = useMemo(() => summarizeRabMaterials(rabSelectedRows), [rabSelectedRows])
+  const rabMaterialOptions = useMemo(() => [...new Set(rabDatabaseRows
+    .filter((row) => !rabRecapPrk || String(cell(row, 2)).trim() === rabRecapPrk)
+    .map((row) => String(cell(row, 7)).trim()).filter(Boolean))].sort(), [rabDatabaseRows, rabRecapPrk])
+  const rabTypeOptions = useMemo(() => [...new Set(rabDatabaseRows
+    .filter((row) => !rabRecapPrk || String(cell(row, 2)).trim() === rabRecapPrk)
+    .map((row) => String(cell(row, 9)).trim()).filter(Boolean))].sort(), [rabDatabaseRows, rabRecapPrk])
+  const vendorValueBreakdown = useMemo(() => buildVendorValueBreakdown(headers, dataset?.rows || EMPTY_ROWS, selectedFilters['NOMOR KONTRAK']), [dataset, headers, selectedFilters])
 
   useEffect(() => {
     let cancelled = false
@@ -706,7 +864,7 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onSav
       <section className="monitoring-kpi-grid" aria-label={`Ringkasan ${module.label}`}>
         {metrics.map((metric, index) => <article className={`panel monitoring-kpi-card monitoring-kpi-${index + 1}`} key={metric.label}>
           <div className="monitoring-kpi-label">{metric.label}</div>
-          <strong title={String(metric.value)}>{metric.value}</strong>
+          <strong className={metric.isText ? 'is-text' : ''} title={String(metric.value)}>{metric.value}</strong>
           <span className="monitoring-kpi-foot"><span /> Berdasarkan filter aktif</span>
         </article>)}
       </section>
@@ -716,8 +874,86 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onSav
           <div><p className="eyebrow">ANALISIS DATA</p><h2>{chart.label}</h2></div>
           <span className="monitoring-chart-note"><Zap size={13} /> Grafik mengikuti filter tabel</span>
         </div>
-        <div className={`monitoring-chart${chart.layout === 'vertical' ? ' is-horizontal' : ''}`}><MonitoringChart chart={chart} /></div>
+        <div className={`monitoring-chart-viewport${chart.scrollable ? ' is-scrollable' : ''}`}>
+          <div className={`monitoring-chart${chart.layout === 'vertical' ? ' is-horizontal' : ''}`} style={chart.dynamicHeight ? { height: chart.dynamicHeight } : undefined}><MonitoringChart chart={chart} /></div>
+        </div>
       </section>
+
+      {isVendorModule && <section className="panel monitoring-chart-panel">
+        <div className="monitoring-panel-heading">
+          <div><p className="eyebrow">PROPORSI NILAI KONTRAK</p><h2>Persentase terhadap Nilai Kontrak</h2></div>
+          <span className="monitoring-chart-note">{selectedFilters['NOMOR KONTRAK'] || 'Semua kontrak'}</span>
+        </div>
+        {vendorValueBreakdown[0]?.contractValue > 0 ? <div className="monitoring-vendor-donuts">
+          {vendorValueBreakdown.map((item) => {
+            const percentage = Math.max(0, Math.min(100, item.percentage))
+            const donutData = [{ name: item.name, value: percentage }, { name: 'Sisa persentase', value: 100 - percentage }]
+            return <article className="monitoring-vendor-donut" key={item.name}>
+              <div className="monitoring-vendor-donut-chart">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={donutData} dataKey="value" nameKey="name" innerRadius={35} outerRadius={49} paddingAngle={1} stroke="none">
+                      <Cell fill={item.color} /><Cell fill="#e9eef4" />
+                    </Pie>
+                    <Tooltip formatter={(value, name) => [`${NUMBER_FORMAT.format(value)}%`, name]} contentStyle={{ border: '1px solid #dce5ef', borderRadius: 6, fontSize: 10 }} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <strong>{NUMBER_FORMAT.format(item.percentage)}%</strong>
+              </div>
+              <div><span>{item.name}</span><strong>{CURRENCY_FORMAT.format(item.value)}</strong></div>
+            </article>
+          })}
+        </div> : <div className="monitoring-chart-empty">Nilai kontrak belum tersedia untuk filter yang dipilih.</div>}
+        <p className="monitoring-vendor-donut-note">Persentase dihitung terhadap total Nilai Kontrak sebesar {CURRENCY_FORMAT.format(vendorValueBreakdown[0]?.contractValue || 0)}.</p>
+      </section>}
+
+      {isRabModule && <section className="monitoring-rab-detail-grid">
+        <article className="panel monitoring-rab-detail-panel">
+          <div className="monitoring-panel-heading"><div><p className="eyebrow">TELUSURI DATABASE</p><h2>Daftar ID RAB</h2></div><span className="monitoring-row-count">{rabIdOptions.length.toLocaleString('id-ID')} ID</span></div>
+          <div className="monitoring-rab-browser-toolbar">
+            <label className="monitoring-search"><Search size={15} /><input value={rabIdSearch} onChange={(event) => setRabIdSearch(event.target.value)} placeholder="Cari ID RAB..." /></label>
+            <label className="monitoring-filter"><Database size={14} /><select aria-label="Pilih ID RAB untuk melihat detail" value={rabSelectedId} onChange={(event) => setRabSelectedId(event.target.value)}><option value="">Pilih ID RAB untuk membuka rincian</option>{rabIdSearchResults.map((id) => <option key={id} value={id}>{id}</option>)}</select></label>
+          </div>
+          {rabSelectedRows.length > 0 ? <>
+            <div className="monitoring-rab-id-summary">
+              <strong>{rabSelectedId}</strong><span>{String(cell(rabSelectedRows[0], 2))}</span><span>{rabSelectedRows.length.toLocaleString('id-ID')} baris material</span><span>Total volume: {NUMBER_FORMAT.format(sumColumn(rabSelectedRows, 8))}</span>
+            </div>
+            <h3 className="monitoring-rab-subheading">Rekap Jenis Material dan Total Volume</h3>
+            <div className="monitoring-table-scroll"><table><thead><tr><th>Jenis Pekerjaan</th><th>Uraian Material</th><th>Baris Material</th><th>Total Volume</th></tr></thead><tbody>
+              {rabSelectedSummary.map((item) => <tr key={`${item.material}-${item.type}`}><td>{item.type}</td><td>{item.material}</td><td>{NUMBER_FORMAT.format(item.rowCount)}</td><td>{NUMBER_FORMAT.format(item.volume)}</td></tr>)}
+            </tbody></table></div>
+            <h3 className="monitoring-rab-subheading">Rincian RAB: No, Sheet, Baris</h3>
+            <div className="monitoring-table-scroll"><table><thead><tr><th>No.</th><th>Sheet</th><th>Baris</th><th>Uraian Material</th><th>Jenis Pekerjaan</th><th>Volume</th></tr></thead><tbody>
+              {rabSelectedRows.map((row, index) => <tr key={`${cell(row, 5)}-${cell(row, 6)}-${index}`}><td>{index + 1}</td><td>{cell(row, 5)}</td><td>{cell(row, 6)}</td><td>{cell(row, 7)}</td><td>{cell(row, 9)}</td><td>{formatCell(cell(row, 8), 'VOLUME')}</td></tr>)}
+            </tbody></table></div>
+          </> : <p className="monitoring-rab-empty">Pilih ID RAB untuk membuka ringkasan dan rincian materialnya.</p>}
+        </article>
+
+        <article className="panel monitoring-rab-detail-panel">
+          <div className="monitoring-panel-heading"><div><p className="eyebrow">REKAP MATERIAL</p><h2>Rekap Material per ID RAB</h2></div></div>
+          <div className="monitoring-rab-recap-filters monitoring-rab-recap-filters-inline">
+            <label><span>Filter PRK</span><select value={rabRekapPrk} onChange={(event) => { setRabRekapPrk(event.target.value); setRabRekapId('') }}><option value="">Semua PRK</option>{rabPrkOptions.map((option) => <option key={option}>{option}</option>)}</select></label>
+            <label><span>Filter ID RAB</span><select value={rabRekapId} onChange={(event) => setRabRekapId(event.target.value)}><option value="">Semua ID RAB</option>{rabIdOptions.filter((id) => !rabRekapPrk || rabDatabaseRows.some((row) => String(cell(row, 1)).trim() === id && String(cell(row, 2)).trim() === rabRekapPrk)).map((id) => <option key={id}>{id}</option>)}</select></label>
+            <label className="monitoring-rab-search-id"><span>Cari ID RAB</span><input value={rabIdSearch} onChange={(event) => setRabIdSearch(event.target.value)} placeholder="Ketik ID RAB" /></label>
+          </div>
+          {rabIdRecapSummary.length ? <div className="monitoring-table-scroll"><table><thead><tr><th>ID RAB</th><th>PRK</th><th>Jenis Pekerjaan</th><th>Uraian Material</th><th>Jumlah Baris</th><th>Total Volume</th></tr></thead><tbody>
+            {rabIdRecapSummary.map((item) => <tr key={`${item.id}-${item.prk}-${item.type}-${item.material}`}><td>{item.id}</td><td>{item.prk}</td><td>{item.type}</td><td>{item.material}</td><td>{NUMBER_FORMAT.format(item.rowCount)}</td><td>{NUMBER_FORMAT.format(item.volume)}</td></tr>)}
+          </tbody></table></div> : <p className="monitoring-rab-empty">Belum ada material untuk filter PRK dan ID RAB ini.</p>}
+          {rabSummary.length > 0 && rabIdRecapSummary.length === 0 && <p className="monitoring-rab-empty">Tidak ada ID RAB yang cocok dengan pencarian.</p>}
+        </article>
+
+        <article className="panel monitoring-rab-detail-panel monitoring-rab-detail-wide">
+          <div className="monitoring-panel-heading"><div><p className="eyebrow">ANALISIS PER PRK</p><h2>Rekap Material Berdasarkan PRK</h2></div><span className="monitoring-row-count">{rabPrkSummary.length.toLocaleString('id-ID')} kombinasi material</span></div>
+          <div className="monitoring-rab-recap-filters monitoring-rab-recap-filters-inline">
+            <label><span>Filter PRK</span><select value={rabRecapPrk} onChange={(event) => { setRabRecapPrk(event.target.value); setRabMaterialFilter(''); setRabTypeFilter('') }}><option value="">Semua PRK</option>{rabPrkOptions.map((option) => <option key={option}>{option}</option>)}</select></label>
+            <label><span>Filter Material</span><select value={rabMaterialFilter} onChange={(event) => setRabMaterialFilter(event.target.value)}><option value="">Semua material</option>{rabMaterialOptions.map((option) => <option key={option}>{option}</option>)}</select></label>
+            <label><span>Jenis Pekerjaan</span><select value={rabTypeFilter} onChange={(event) => setRabTypeFilter(event.target.value)}><option value="">Semua jenis</option>{rabTypeOptions.map((option) => <option key={option}>{option}</option>)}</select></label>
+          </div>
+          {rabPrkSummary.length ? <div className="monitoring-table-scroll"><table><thead><tr><th>PRK</th><th>Uraian Material</th><th>Jenis Pekerjaan</th><th>Jumlah Baris</th><th>Total Volume</th><th>Estimasi Harga</th></tr></thead><tbody>
+            {rabPrkSummary.map((item) => <tr key={`${item.material}-${item.type}`}><td>{rabRecapPrk || 'Semua PRK'}</td><td>{item.material}</td><td>{item.type}</td><td>{NUMBER_FORMAT.format(item.rowCount)}</td><td>{NUMBER_FORMAT.format(item.volume)}</td><td>{item.totalPrice ? CURRENCY_FORMAT.format(item.totalPrice) : '-'}</td></tr>)}
+          </tbody></table></div> : <p className="monitoring-rab-empty">Belum ada material untuk filter yang dipilih.</p>}
+        </article>
+      </section>}
 
       <section className="panel monitoring-table-panel">
         <div className="monitoring-panel-heading monitoring-table-heading">
