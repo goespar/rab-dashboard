@@ -227,7 +227,7 @@
 .public-chart-legend b { margin-left: auto; font-size: inherit; font-weight: 600; }
 .public-chart-empty { position: absolute; inset: 8px; border: 12px solid #e1e6ed; border-radius: 50%; }
 .public-program-metrics { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); border-top: 1px solid #cbd5e1; border-left: 1px solid #cbd5e1; }
-.public-program-metrics:not(.is-continuation) { grid-template-columns: .85fr 1fr 1.8fr 1.35fr; grid-template-rows: repeat(2, minmax(44px, auto)); }
+.public-program-metrics:not(.is-continuation) { grid-template-columns: 1fr 1fr 1.35fr .95fr; grid-template-rows: repeat(2, minmax(44px, auto)); }
 .public-program-metrics:not(.is-continuation) > div:nth-child(1) { grid-column: 1; grid-row: 1; }
 .public-program-metrics:not(.is-continuation) > div:nth-child(2) { grid-column: 2; grid-row: 1; }
 .public-program-metrics:not(.is-continuation) > div:nth-child(3) { grid-column: 3; grid-row: 1; }
@@ -235,11 +235,13 @@
 .public-program-metrics:not(.is-continuation) > div:nth-child(5) { grid-column: 2; grid-row: 2; }
 .public-program-metrics:not(.is-continuation) > div:nth-child(6) { grid-column: 3; grid-row: 2; }
 .public-program-metrics:not(.is-continuation) > div:nth-child(7) { grid-column: 4; grid-row: 1 / span 2; }
+.public-program-metrics:not(.is-continuation) > div:nth-child(6) span,
+.public-program-metrics:not(.is-continuation) > div:nth-child(7) span { font-size: 7px; letter-spacing: -.15px; }
 .public-program-metrics.is-continuation { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .public-program-metrics > div { display: grid; align-content: center; gap: 4px; min-width: 0; padding: 6px 4px; border-right: 1px solid #cbd5e1; border-bottom: 1px solid #cbd5e1; text-align: center; }
 .public-program-metrics span, .public-program-metrics small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .public-program-metrics span { color: #52667d; font-size: 8px; font-weight: 750; }
-.public-program-metrics strong { display: block; color: #233d57; font-size: 9px; font-variant-numeric: tabular-nums; line-height: 1.25; overflow-wrap: anywhere; }
+.public-program-metrics strong { display: block; overflow: hidden; color: #233d57; font-size: 8px; font-variant-numeric: tabular-nums; line-height: 1.25; overflow-wrap: normal; text-overflow: clip; white-space: nowrap; }
 .public-program-metrics small { color: #304b63; font-size: 8px; font-variant-numeric: tabular-nums; }
 .public-payment-track { height: 4px; background: #e8edf2; }
 .public-payment-track span { display: block; height: 100%; background: #15a5c9; }
