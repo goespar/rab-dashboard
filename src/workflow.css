@@ -99,6 +99,10 @@
 .workflow-realizations-table > table { min-width: 1245px; }
 .workflow-realizations-table .workflow-component-details table { min-width: 850px; }
 .workflow-realizations-table > table, .workflow-realizations-table .workflow-component-details table { table-layout: fixed; }
+.workflow-realizations-table .workflow-component-details th:nth-child(1),
+.workflow-realizations-table .workflow-component-details th:nth-child(2) { width: 105px; }
+.workflow-realizations-table .workflow-component-details th.workflow-date-heading { height: auto; overflow: visible; overflow-wrap: normal; text-overflow: clip; vertical-align: middle; white-space: normal; word-break: normal; }
+.workflow-realizations-table .workflow-component-details tbody td:nth-child(-n+2) { height: auto; overflow: visible; overflow-wrap: anywhere; line-height: 1.35; text-overflow: clip; vertical-align: top; white-space: normal; }
 .workflow-realizations-table > table th:first-child, .workflow-realizations-table > table td:first-child { width: 60px; }
 .workflow-realizations-table > table th:nth-child(2), .workflow-realizations-table > table td:nth-child(2) { width: 140px; }
 .workflow-realizations-table > table th:nth-child(3), .workflow-realizations-table > table td:nth-child(3),
