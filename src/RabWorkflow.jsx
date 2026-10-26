@@ -37,6 +37,8 @@ const normalizeCriteria = (value) => {
 }
 const createId = () => globalThis.crypto?.randomUUID?.() || `rab-${Date.now()}-${Math.random().toString(16).slice(2)}`
 const normalizeWorkName = (value) => String(value || '').trim().toLocaleLowerCase()
+const getRealizationActivityName = (activity, contract) =>
+  String(contract?.description || activity?.workPackage || activity?.componentName || activity?.name || '').trim()
 const hasContractDetails = (record) => String(record?.contractNumber ?? '').trim().length > 0
   || String(record?.vendor ?? '').trim().length > 0
   || number(record?.contractValue) > 0
@@ -376,8 +378,9 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
       activityNames: new Set(),
       entries: [],
     }
-    if (activity) group.activityNames.add(activity.componentName || activity.name)
-    group.entries.push({ row, activity })
+    const activityName = getRealizationActivityName(activity, contract) || row.activityName
+    if (activityName) group.activityNames.add(activityName)
+    group.entries.push({ row, activity, contract })
     groups.set(key, group)
     return groups
   }, new Map()).values()].map((group) => {
@@ -961,7 +964,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
         record.unit = materials.find((item) => item.id === form.materialId)?.unit || ''
         record.criteria = activity?.criteria || ''
         record.prk = activity?.prk || ''
-        record.activityName = activity?.name || ''
+        record.activityName = activity?.componentName || activity?.name || ''
       }
       if (view === 'realizations') {
         const billing = getBillingForDate(selectedRealizationContract, form.date)
@@ -974,7 +977,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
         const activity = realizationActivityById.get(String(form.activityId))
         record.criteria = activity?.criteria || ''
         record.prk = activity?.prk || ''
-        record.activityName = activity?.name || ''
+        record.activityName = getRealizationActivityName(activity, selectedRealizationContract)
         record.programRecordId = selectedRealizationContract?.id || activity?.programRecordId || ''
       }
       const nextRecords = editingId ? rows.map((row) => row.id === editingId ? record : row) : [record, ...rows]
@@ -1469,7 +1472,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
     </>
     return <>
       {field('prk', 'No. PRK', { choices: realizationPrkChoices.map((prk) => ({ value: prk, label: prk })), onChange: updateRealizationPrk })}
-      {field('activityId', 'Kegiatan RAB', { choices: activityGroupChoices.map((activity) => ({ value: activity.id, label: `${activity.criteria || '-'} | ${activity.workPackage ? `${activity.workPackage} — ` : ''}${activity.componentName || activity.name}` })), onChange: updateRealizationActivity, searchable: true })}
+      {field('activityId', 'Kegiatan RAB', { choices: activityGroupChoices.map((activity) => ({ value: activity.id, label: `${activity.criteria || '-'} | ${getRealizationActivityName(activity, programRecordForActivity(activity))}` })), onChange: updateRealizationActivity, searchable: true })}
       {selectedRealizationContract && <div className="workflow-realization-contract workflow-rab-step-full"><div><span>Nilai kontrak</span><strong>{formatCurrency(selectedRealizationContract.contractValue)}</strong></div><div><span>Total dibayar</span><strong>{formatCurrency(number(selectedRealizationContract.paid))}</strong></div><div><span>Sisa kontrak</span><strong>{formatCurrency(Math.max(0, number(selectedRealizationContract.contractValue) - number(selectedRealizationContract.paid)))}</strong></div></div>}
       {selectedRealizationContract && <div className="workflow-realization-contract workflow-rab-step-full"><div><span>Rencana tagih kontrak</span><strong>{selectedRealizationContract.plannedBilling || '-'}</strong></div><div><span>Nilai tagihan terjadwal bulan ini</span><strong>{selectedRealizationBillingIsScheduled ? formatCurrency(selectedRealizationBilling.amount) : 'Belum diatur'}</strong></div></div>}
       {field('date', 'Tanggal tagihan', { type: 'date' })}
@@ -1606,9 +1609,9 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
       return [
         <tr key={group.key}>
           <td>{group.entries[0]?.activity?.criteria || '-'}</td>
-          <td>{group.prk || '-'}</td>
-          <td>{group.activityNames.join(', ') || '-'}</td>
-          <td>{group.contractNumber || '-'}</td>
+          <td className="workflow-prk-name">{group.prk || '-'}</td>
+          <td className="workflow-activity-name">{group.activityNames.join(', ') || '-'}</td>
+          <td className="workflow-contract-number">{group.contractNumber || '-'}</td>
           <td className="workflow-total">{formatCurrency(group.contractValue)}</td>
           <td className="workflow-total">{formatCurrency(group.billed)}</td>
           <td className="workflow-total">{formatCurrency(group.paid)}</td>
@@ -1616,7 +1619,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
           <td><span className={`workflow-payment-status ${group.latestStatus === 'LUNAS' ? 'is-paid' : 'is-unpaid'}`}>{group.latestStatus || 'BELUM LUNAS'}</span></td>
           <td><button className="workflow-expand-button" type="button" aria-expanded={isExpanded} onClick={() => setExpandedRealizationGroup(isExpanded ? '' : group.key)}><ChevronDown size={14} />{isExpanded ? 'Tutup' : `${group.entries.length} rincian`}</button></td>
         </tr>,
-        ...(isExpanded ? [<tr className="workflow-component-detail-row" key={`${group.key}-details`}><td colSpan="10"><div className="workflow-component-details"><table><thead><tr><th>Tanggal tagihan</th><th>Tanggal bayar</th><th>Kegiatan</th><th>Nilai tagihan</th><th>Nilai dibayar</th><th>Status pembayaran</th><th>Catatan</th><th>Aksi</th></tr></thead><tbody>{group.entries.map(({ row, activity }) => <tr key={row.id}><td>{row.date || '-'}</td><td>{row.paymentDate || '-'}</td><td>{activity?.componentName || activity?.name || row.activityName || '-'}</td><td>{formatCurrency(row.billed)}</td><td>{formatCurrency(row.paid)}</td><td><span className={`workflow-payment-status ${row.paymentStatus === 'LUNAS' ? 'is-paid' : 'is-unpaid'}`}>{row.paymentStatus || 'BELUM LUNAS'}</span></td><td>{row.notes || '-'}</td>{rowActions(row, 'realisasi')}</tr>)}</tbody><tfoot><tr><td colSpan="3">Total kumulatif</td><td>{formatCurrency(group.billed)}</td><td>{formatCurrency(group.paid)}</td><td colSpan="3">Sisa kontrak {formatCurrency(group.remaining)}</td></tr></tfoot></table></div></td></tr>] : []),
+        ...(isExpanded ? [<tr className="workflow-component-detail-row" key={`${group.key}-details`}><td colSpan="10"><div className="workflow-component-details"><table><thead><tr><th>Tanggal tagihan</th><th>Tanggal bayar</th><th>Kegiatan</th><th>Nilai tagihan</th><th>Nilai dibayar</th><th>Status pembayaran</th><th>Catatan</th><th>Aksi</th></tr></thead><tbody>{group.entries.map(({ row, activity, contract }) => <tr key={row.id}><td>{row.date || '-'}</td><td>{row.paymentDate || '-'}</td><td className="workflow-activity-name">{getRealizationActivityName(activity, contract) || row.activityName || '-'}</td><td>{formatCurrency(row.billed)}</td><td>{formatCurrency(row.paid)}</td><td><span className={`workflow-payment-status ${row.paymentStatus === 'LUNAS' ? 'is-paid' : 'is-unpaid'}`}>{row.paymentStatus || 'BELUM LUNAS'}</span></td><td>{row.notes || '-'}</td>{rowActions(row, 'realisasi')}</tr>)}</tbody><tfoot><tr><td colSpan="3">Total kumulatif</td><td>{formatCurrency(group.billed)}</td><td>{formatCurrency(group.paid)}</td><td colSpan="3">Sisa kontrak {formatCurrency(group.remaining)}</td></tr></tfoot></table></div></td></tr>] : []),
       ]
     })
     if (view === 'components') {

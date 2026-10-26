@@ -237,9 +237,9 @@
 .public-program-metrics:not(.is-continuation) > div:nth-child(7) { grid-column: 4; grid-row: 1 / span 2; }
 .public-program-metrics.is-continuation { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .public-program-metrics > div { display: grid; align-content: center; gap: 4px; min-width: 0; padding: 6px 4px; border-right: 1px solid #cbd5e1; border-bottom: 1px solid #cbd5e1; text-align: center; }
-.public-program-metrics span, .public-program-metrics strong, .public-program-metrics small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.public-program-metrics span, .public-program-metrics small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .public-program-metrics span { color: #52667d; font-size: 8px; font-weight: 750; }
-.public-program-metrics strong { color: #233d57; font-size: 9px; font-variant-numeric: tabular-nums; }
+.public-program-metrics strong { display: block; color: #233d57; font-size: 9px; font-variant-numeric: tabular-nums; line-height: 1.25; overflow-wrap: anywhere; }
 .public-program-metrics small { color: #304b63; font-size: 8px; font-variant-numeric: tabular-nums; }
 .public-payment-track { height: 4px; background: #e8edf2; }
 .public-payment-track span { display: block; height: 100%; background: #15a5c9; }
