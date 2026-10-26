@@ -26,6 +26,15 @@ const WORKFLOW_SHEETS = {
   paTransfers: 'PA_TRANSFERS',
   realizations: 'REALISASI',
 }
+const MONITORING_SHEETS = {
+  spb: 'MON_SPB',
+  stock: 'MON_STOCK_GUDANG',
+  load: 'MON_BEBAN',
+  rabDatabase: 'MON_DATABASE_RAB',
+  tibet: 'MON_TIBET',
+  vendor: 'MON_KONTRAK_VENDOR',
+  customers: 'MON_KEBUTUHAN_PELANGGAN',
+}
 const WORKFLOW_COLUMNS = {
   materials: [
     ['ID', 'id'], ['Kode', 'code'], ['Uraian Material', 'name'], ['Satuan', 'unit'], ['Kriteria', 'criteria'],
@@ -103,10 +112,11 @@ function doGet(event) {
   if (action === 'health') return json_({ ok: true, service: 'RAB Monitor' })
   if (action === 'authStatus') return json_({ ok: true, ...authStatus_() })
   if (action === 'publicDashboard') return json_({ ok: true, summary: cachedPublicDashboard_() })
-  if (action !== 'loadWorkflow' && action !== 'load') return json_({ ok: false, error: 'Aksi tidak dikenal.' })
+  if (action !== 'loadWorkflow' && action !== 'load' && action !== 'loadMonitoring') return json_({ ok: false, error: 'Aksi tidak dikenal.' })
   const authorization = authorize_(event.parameter.token)
   if (!authorization.ok) return json_({ ok: false, error: authorization.error, code: 'AUTH_REQUIRED' })
   if (action === 'loadWorkflow') return json_({ ok: true, collections: loadWorkflow_(), user: authorization.user })
+  if (action === 'loadMonitoring') return json_({ ok: true, datasets: loadMonitoring_(), user: authorization.user })
   const sheet = getDataSheet_()
   syncPrkRemainingColumn_(sheet)
   const values = sheet.getDataRange().getValues()
@@ -141,6 +151,14 @@ function doPost(event) {
     return json_(saveUser_(payload.user))
   }
   if (authorization.user.role === 'viewer') return json_({ ok: false, error: 'Akun viewer hanya memiliki akses baca.' })
+  if (payload.action === 'saveMonitoring') {
+    try {
+      const result = saveMonitoring_(payload.datasets)
+      return json_({ ok: true, ...result })
+    } catch (error) {
+      return json_({ ok: false, error: error.message || 'Data Monitoring gagal disimpan.' })
+    }
+  }
   if (payload.action === 'saveWorkflow') {
     if (!Object.prototype.hasOwnProperty.call(WORKFLOW_SHEETS, payload.collection) || !Array.isArray(payload.records)) {
       return json_({ ok: false, error: 'Jenis data atau daftar record tidak valid.' })
@@ -222,6 +240,87 @@ function getDataSheet_() {
   if (!sheet) sheet = spreadsheet.insertSheet(DATA_SHEET_NAME)
   ensureDataHeaders_(sheet)
   return sheet
+}
+
+function getMonitoringSpreadsheet_() {
+  const spreadsheetId = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID')
+  const spreadsheet = spreadsheetId ? SpreadsheetApp.openById(spreadsheetId) : SpreadsheetApp.getActiveSpreadsheet()
+  if (!spreadsheet) throw new Error('Atur Script Property SPREADSHEET_ID terlebih dahulu.')
+  return spreadsheet
+}
+
+function loadMonitoring_() {
+  const spreadsheet = getMonitoringSpreadsheet_()
+  const datasets = {}
+  Object.keys(MONITORING_SHEETS).forEach((moduleId) => {
+    const sheet = spreadsheet.getSheetByName(MONITORING_SHEETS[moduleId])
+    if (!sheet || sheet.getLastRow() < 1 || sheet.getLastColumn() < 1) return
+    const values = sheet.getDataRange().getValues()
+    const headers = (values.shift() || []).map((value) => value === null ? '' : value)
+    if (!headers.some((header) => String(header).trim())) return
+    const rows = values
+      .filter((row) => row.some((value) => value !== '' && value !== null))
+      .map((row) => headers.map((_, column) => row[column] === null ? '' : row[column]))
+    datasets[moduleId] = { sheetName: MONITORING_SHEETS[moduleId], headers, rows }
+  })
+  return datasets
+}
+
+function saveMonitoring_(datasets) {
+  if (!datasets || typeof datasets !== 'object' || Array.isArray(datasets)) {
+    throw new Error('Daftar data Monitoring tidak valid.')
+  }
+  const moduleIds = Object.keys(datasets)
+  if (!moduleIds.length) throw new Error('Tidak ada data Monitoring untuk disimpan.')
+  moduleIds.forEach((moduleId) => {
+    const dataset = datasets[moduleId]
+    if (!Object.prototype.hasOwnProperty.call(MONITORING_SHEETS, moduleId)
+      || !dataset || !Array.isArray(dataset.headers) || !Array.isArray(dataset.rows)) {
+      throw new Error('Struktur data Monitoring tidak valid.')
+    }
+    if (!dataset.headers.length || dataset.headers.length > 80 || dataset.rows.length > 10000) {
+      throw new Error('Jumlah kolom atau baris Monitoring melampaui batas yang diizinkan.')
+    }
+    if (dataset.rows.some((row) => !Array.isArray(row) || row.length > dataset.headers.length)) {
+      throw new Error('Jumlah kolom pada salah satu baris Monitoring tidak sesuai.')
+    }
+  })
+  const cellCount = moduleIds.reduce((total, moduleId) => {
+    const dataset = datasets[moduleId]
+    return total + dataset.headers.length * (dataset.rows.length + 1)
+  }, 0)
+  if (cellCount > 250000) throw new Error('Ukuran data Monitoring melebihi batas 250.000 sel per penyimpanan.')
+
+  const lock = LockService.getScriptLock()
+  lock.waitLock(10000)
+  try {
+    const spreadsheet = getMonitoringSpreadsheet_()
+    let totalRows = 0
+    moduleIds.forEach((moduleId) => {
+      const dataset = datasets[moduleId]
+      const sheetName = MONITORING_SHEETS[moduleId]
+      const sheet = spreadsheet.getSheetByName(sheetName) || spreadsheet.insertSheet(sheetName)
+      const headers = dataset.headers.map((header) => monitoringCellValue_(header, 500))
+      const rows = dataset.rows.map((row) => headers.map((_, column) => {
+        return monitoringCellValue_(row[column], 50000)
+      }))
+      sheet.clearContents()
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers])
+      if (rows.length) sheet.getRange(2, 1, rows.length, headers.length).setValues(rows)
+      totalRows += rows.length
+    })
+    return { modules: moduleIds.length, rows: totalRows, sheetNames: moduleIds.map((moduleId) => MONITORING_SHEETS[moduleId]) }
+  } finally {
+    lock.releaseLock()
+  }
+}
+
+function monitoringCellValue_(value, maxLength) {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'number' || typeof value === 'boolean' || value instanceof Date) return value
+  const text = typeof value === 'string' ? value : JSON.stringify(value)
+  if (text.length > maxLength) throw new Error('Isi salah satu sel melebihi batas ' + maxLength.toLocaleString('id-ID') + ' karakter.')
+  return text.startsWith('=') ? "'" + text : text
 }
 
 function ensureDataHeaders_(sheet) {
