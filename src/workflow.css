@@ -158,18 +158,22 @@
 .workflow-component-details td { background: #fff; }
 .workflow-component-details tfoot { background: #edf4f8; font-weight: 700; }
 .workflow-component-details tfoot td { border-top: 1px solid #dce4ee; color: #30435f; font-weight: 700; }
-.workflow-component-details .workflow-rab-detail-table { width: 100%; min-width: 1050px; table-layout: fixed; }
-.workflow-rab-detail-table col:nth-child(1) { width: 4%; }
-.workflow-rab-detail-table col:nth-child(2) { width: 11%; }
-.workflow-rab-detail-table col:nth-child(3),
-.workflow-rab-detail-table col:nth-child(4) { width: 6%; }
-.workflow-rab-detail-table col:nth-child(5),
-.workflow-rab-detail-table col:nth-child(6),
-.workflow-rab-detail-table col:nth-child(7),
-.workflow-rab-detail-table col:nth-child(8) { width: 12%; }
-.workflow-rab-detail-table col:nth-child(9) { width: 17%; }
-.workflow-rab-detail-table col:nth-child(10) { width: 8%; }
+.workflow-component-details .workflow-rab-detail-table { width: 100%; min-width: 1036px; table-layout: fixed !important; }
+.workflow-component-details .workflow-rab-detail-table col:nth-child(1) { width: 36px !important; }
+.workflow-component-details .workflow-rab-detail-table col:nth-child(2) { width: 340px !important; }
+.workflow-component-details .workflow-rab-detail-table col:nth-child(3) { width: 50px !important; }
+.workflow-component-details .workflow-rab-detail-table col:nth-child(4) { width: 50px !important; }
+.workflow-component-details .workflow-rab-detail-table col:nth-child(5),
+.workflow-component-details .workflow-rab-detail-table col:nth-child(6),
+.workflow-component-details .workflow-rab-detail-table col:nth-child(7),
+.workflow-component-details .workflow-rab-detail-table col:nth-child(8) { width: 95px !important; }
+.workflow-component-details .workflow-rab-detail-table col:nth-child(9) { width: 130px !important; }
+.workflow-component-details .workflow-rab-detail-table col:nth-child(10) { width: 50px !important; }
 .workflow-rab-detail-table th[colspan] { text-align: center; }
+.workflow-component-details .workflow-rab-detail-table th:first-child,
+.workflow-component-details .workflow-rab-detail-table td:first-child { width: 36px !important; min-width: 36px; max-width: 36px; padding-right: 2px; padding-left: 2px; white-space: nowrap; }
+.workflow-component-details .workflow-rab-detail-table th:nth-child(2),
+.workflow-component-details .workflow-rab-detail-table td:nth-child(2) { width: 340px !important; min-width: 340px; max-width: 340px; }
 .workflow-rab-detail-table td:nth-child(n+5):nth-child(-n+9),
 .workflow-rab-detail-table tfoot td:nth-child(n+7):nth-child(-n+9) { white-space: nowrap; }
 .workflow-rab-detail-table th { overflow-wrap: anywhere; }
@@ -253,11 +257,21 @@
 .workflow-material-filters select { width: 100%; height: 32px; min-width: 0; padding: 0 8px; border: 1px solid #dce4ee; border-radius: 4px; color: #30435f; background: #fff; font-size: 10px; }
 .workflow-material-filter-count { grid-column: 1 / -1; color: #718198; font-size: 9px; }
 .workflow-rab-table-scroll { grid-column: 1/-1; overflow-x: auto; border: 1px solid #dfe6ef; border-radius: 4px; }
-.workflow-rab-table { width: 100%; min-width: 1050px; border-collapse: collapse; }
+.workflow-rab-table { width: 100%; min-width: 1071px; border-collapse: collapse; }
+.workflow-rab-material-table { table-layout: fixed !important; }
+.workflow-rab-material-table col:nth-child(1) { width: 36px !important; }
+.workflow-rab-material-table col:nth-child(2) { width: 340px !important; }
+.workflow-rab-material-table col:nth-child(3) { width: 65px !important; }
+.workflow-rab-material-table col:nth-child(4) { width: 55px !important; }
+.workflow-rab-material-table col:nth-child(n+5) { width: 115px !important; }
 .workflow-rab-table th, .workflow-rab-table td { padding: 8px 9px; border-bottom: 1px solid #edf1f6; color: #40516b; font-size: 9px; text-align: right; white-space: nowrap; }
 .workflow-rab-table th { color: #718198; background: #f7f9fc; font-size: 8px; font-weight: 700; }
 .workflow-rab-table th:nth-child(1), .workflow-rab-table td:nth-child(1) { text-align: center; }
 .workflow-rab-table th:nth-child(2), .workflow-rab-table td:nth-child(2) { text-align: left; }
+.workflow-rab-material-table th:first-child,
+.workflow-rab-material-table td:first-child { width: 36px !important; min-width: 36px; max-width: 36px; padding-right: 2px; padding-left: 2px; white-space: nowrap; }
+.workflow-rab-material-table th:nth-child(2),
+.workflow-rab-material-table td:nth-child(2) { width: 340px !important; min-width: 340px; max-width: 340px; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; }
 .workflow-rab-table td strong, .workflow-rab-table td small { display: block; }
 .workflow-rab-table td strong { color: #26364d; font-weight: 600; }
 .workflow-rab-table td small { margin-top: 3px; color: #7d8ba0; font-size: 8px; }

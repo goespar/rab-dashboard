@@ -67,6 +67,8 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
   const [choiceSearch, setChoiceSearch] = useState('')
   const [openChoiceField, setOpenChoiceField] = useState('')
   const [printGroupKey, setPrintGroupKey] = useState('')
+  const [printRequestVersion, setPrintRequestVersion] = useState(0)
+  const handledPrintRequestRef = useRef(0)
   const [componentMaterialFilters, setComponentMaterialFilters] = useState({ operation: 'all', criteria: 'all', source: 'all' })
   const [saving, setSaving] = useState(false)
   const savingRef = useRef(false)
@@ -1027,8 +1029,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
       && String(item.prk || '').trim() === String(group.prk || '').trim()
       && normalizeWorkName(item.activity) === normalizeWorkName(group.workPackage))
     if (!printGroup) return
-    setPrintGroupKey(printGroup.key)
-    window.setTimeout(() => window.print(), 0)
+    requestPrint(printGroup.key)
   }
 
   async function removeComponentGroup(group) {
@@ -1043,13 +1044,23 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
     if (group.components[0]) printActivityComponent(group.components[0])
   }
 
-  function printActivityComponent(component) {
-    const componentIds = new Set(component.records.map((record) => record.id))
-    const printGroup = printGroups.find((item) => item.isMaterialGroup
-      && item.componentIds?.some((id) => componentIds.has(id)))
+  function requestPrint(groupKey) {
+    setPrintGroupKey(groupKey)
+    setPrintRequestVersion((version) => version + 1)
+  }
+
+  function printActivityComponent(component, group) {
+    const printGroup = view === 'activities'
+      ? printGroups.find((item) => item.isActivityComponent
+        && item.sourceGroupKey === group?.key
+        && item.sourceComponentKey === component.id)
+      : (() => {
+        const componentIds = new Set(component.records.map((record) => record.id))
+        return printGroups.find((item) => item.isMaterialGroup
+          && item.componentIds?.some((id) => componentIds.has(id)))
+      })()
     if (!printGroup) return
-    setPrintGroupKey(printGroup.key)
-    window.setTimeout(() => window.print(), 0)
+    requestPrint(printGroup.key)
   }
 
   const editRecord = useCallback((record) => {
@@ -1205,7 +1216,8 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
   }
 
   function rabMaterialTable() {
-    return <div className="workflow-rab-table-scroll workflow-rab-step-full"><table className="workflow-rab-table">
+    return <div className="workflow-rab-table-scroll workflow-rab-step-full"><table className="workflow-rab-table workflow-rab-material-table">
+      <colgroup><col /><col /><col /><col /><col /><col /><col /><col /><col /></colgroup>
       <thead><tr><th>No.</th><th>Uraian</th><th>Volume</th><th>Satuan</th><th>Harga material</th><th>Harga jasa</th><th>Jml material</th><th>Jml jasa</th><th>Total harga</th></tr></thead>
       <tbody>{visibleActivityLineItems.map((line, index) => {
         const volume = number(form.materialVolumes[line.id])
@@ -1566,8 +1578,8 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
                   <td>{component.records.length} material</td>
                   <td className="workflow-total">{formatCurrency(component.total)}</td>
                   <td className="workflow-actions-cell"><div className="workflow-row-actions">
-                    <button className="workflow-edit" type="button" title="Cetak RAB Komponen" aria-label={`Cetak ${component.displayName}`} onClick={() => printActivityComponent(component)}><Printer size={14} /></button>
-                    {!readOnly && <button className="workflow-edit" type="button" title="Edit volume RAB" aria-label={`Edit volume ${component.displayName}`} onClick={() => editRecord(component.records[0])}><Pencil size={14} /></button>}
+                    <button className="workflow-edit" type="button" title="Cetak RAB Komponen" aria-label={`Cetak ${component.displayName}`} onClick={() => printActivityComponent(component, group)}><Printer size={14} /></button>
+                    {!readOnly && <button className="workflow-edit" type="button" title="Edit volume RAB" aria-label={`Edit volume ${component.displayName}`} onClick={() => onEditRab?.(component.records[0])}><Pencil size={14} /></button>}
                   </div></td>
                 </tr>
                 {componentExpanded && <tr><td colSpan="5"><div className="workflow-component-details">
@@ -1584,7 +1596,6 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
                       const materialTotal = quantity * number(record.materialPrice)
                       const serviceTotal = quantity * number(record.servicePrice)
                       return <tr key={record.id}><td>{rowIndex + 1}</td><td className="workflow-component-description">{record.materialName || record.name || '-'}</td><td>{quantity}</td><td>{record.unit || '-'}</td><td>{formatCurrency(record.materialPrice)}</td><td>{formatCurrency(record.servicePrice)}</td><td>{formatCurrency(materialTotal)}</td><td>{formatCurrency(serviceTotal)}</td><td className="workflow-total">{formatCurrency(materialTotal + serviceTotal)}</td><td className="workflow-actions-cell"><div className="workflow-row-actions">
-                        <button className="workflow-edit" type="button" title="Cetak RAB Komponen" aria-label={`Cetak ${record.materialName || record.name}`} onClick={() => printActivityComponent(component)}><Printer size={14} /></button>
                         {!readOnly && <button className="workflow-delete" type="button" title="Hapus dari Input RAB" aria-label={`Hapus ${record.materialName || record.name}`} onClick={() => removeComponentGroup({ ...group, title: record.materialName || record.name, rows: [record] })}><Trash2 size={14} /></button>}
                       </div></td></tr>
                     })}</tbody>
@@ -1806,7 +1817,25 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
     }))
     return { ...group, componentGroups }
   })
-  const activityPrintGroups = componentBackedPrintGroups
+  const activityComponentPrintGroups = activitySavedGroups.flatMap((group) => group.components.map((component) => ({
+    key: `activity-component::${group.key}::${component.id}`,
+    criteria: component.criteria || group.criteria || '',
+    activity: component.displayName,
+    prk: group.prk,
+    rabNumber: group.rabNumber,
+    rabTitle: group.rabTitle,
+    componentGroups: [{
+      id: component.id,
+      activity: component.displayName,
+      quantityPerUnit: 1,
+      materialPrice: component.materialTotal,
+      servicePrice: component.serviceTotal,
+    }],
+    isActivityComponent: true,
+    sourceGroupKey: group.key,
+    sourceComponentKey: component.id,
+  })))
+  const activityPrintGroups = [...componentBackedPrintGroups, ...activityComponentPrintGroups]
   const printGroups = view === 'activities' ? activityPrintGroups : componentPrintGroups
   const selectedPrintGroup = printGroups.find((group) => group.key === printGroupKey)
   const printableComponents = selectedPrintGroup
@@ -1814,6 +1843,14 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
       ? selectedPrintGroup.componentGroups
       : components.filter((row) => selectedPrintGroup.componentIds?.includes(row.id))
     : []
+  useEffect(() => {
+    if (printRequestVersion === handledPrintRequestRef.current || !selectedPrintGroup || !printableComponents.length) return undefined
+    const frame = window.requestAnimationFrame(() => {
+      handledPrintRequestRef.current = printRequestVersion
+      window.print()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [printRequestVersion, printableComponents.length, selectedPrintGroup])
   const printVolumeMultiplier = 1
   const printableRows = printableComponents.map((row) => {
     const volume = number(row.quantityPerUnit) * printVolumeMultiplier
@@ -1920,7 +1957,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
     </section>}
 
     <section className="panel workflow-table-panel">
-      <div className="workflow-table-heading"><div><p className="eyebrow">DATA TERSIMPAN</p><h2>{view === 'materialRecap' ? 'Rencana dan pemakaian material' : meta.title}</h2></div>{(view === 'components' || view === 'activities') ? <div className="workflow-print-controls"><select aria-label={view === 'activities' ? 'Pilih kegiatan untuk dicetak' : 'Pilih komponen pekerjaan untuk dicetak'} value={printGroupKey} onChange={(event) => setPrintGroupKey(event.target.value)}><option value="">{view === 'activities' ? 'Pilih kegiatan' : 'Pilih komponen pekerjaan'}</option>{printGroups.map((group) => <option key={group.key} value={group.key}>{group.criteria ? `${group.criteria} | ` : ''}{group.activity}{group.prk ? ` | PRK ${group.prk}` : ''}</option>)}</select><button className="button button-secondary" type="button" disabled={!printableComponents.length} onClick={() => window.print()}><Printer size={15} /> Cetak RAB</button></div> : <span className="workflow-count">{view === 'materialRecap' ? plannedMaterialRows.length : view === 'realizations' ? realizationGroups.length : rows.length} {view === 'realizations' ? 'kontrak' : 'baris'}</span>}</div>
+      <div className="workflow-table-heading"><div><p className="eyebrow">DATA TERSIMPAN</p><h2>{view === 'materialRecap' ? 'Rencana dan pemakaian material' : meta.title}</h2></div>{(view === 'components' || view === 'activities') ? <div className="workflow-print-controls"><select aria-label={view === 'activities' ? 'Pilih kegiatan untuk dicetak' : 'Pilih komponen pekerjaan untuk dicetak'} value={printGroupKey} onChange={(event) => setPrintGroupKey(event.target.value)}><option value="">{view === 'activities' ? 'Pilih kegiatan' : 'Pilih komponen pekerjaan'}</option>{printGroups.map((group) => <option key={group.key} value={group.key}>{group.criteria ? `${group.criteria} | ` : ''}{group.activity}{group.prk ? ` | PRK ${group.prk}` : ''}</option>)}</select><button className="button button-secondary" type="button" disabled={!printableComponents.length} onClick={() => requestPrint(printGroupKey)}><Printer size={15} /> Cetak RAB</button></div> : <span className="workflow-count">{view === 'materialRecap' ? plannedMaterialRows.length : view === 'realizations' ? realizationGroups.length : rows.length} {view === 'realizations' ? 'kontrak' : 'baris'}</span>}</div>
       <div className="workflow-toolbar"><label className="workflow-search"><Search size={15} /><input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Cari uraian, PRK, atau kegiatan" /></label>{view !== 'components' && <div className="workflow-segment" role="group" aria-label="Filter kriteria"><button className={criteriaFilter === 'all' ? 'selected' : ''} onClick={() => setCriteriaFilter('all')}>Semua</button><button className={criteriaFilter === 'TM' ? 'selected' : ''} onClick={() => setCriteriaFilter('TM')}>TM</button><button className={criteriaFilter === 'TR' ? 'selected' : ''} onClick={() => setCriteriaFilter('TR')}>TR</button></div>}</div>
       <div className={`workflow-table-scroll ${view === 'components' || view === 'activities' ? 'workflow-component-table' : ''} ${view === 'activities' ? 'workflow-activities-table' : ''} ${view === 'realizations' ? 'workflow-realizations-table' : ''} ${view === 'materials' ? 'workflow-materials-freeze-scroll' : ''} ${view === 'activityCatalog' ? 'workflow-catalog-freeze-scroll' : ''}`}><table><thead>{view === 'components' ? <tr>{['No', 'Nama RAB', 'Jumlah Komponen', 'Subtotal (Rp)', 'Aksi'].map((header) => <th key={header}>{header}</th>)}</tr> : view === 'activities' ? <tr>{['No', 'Kegiatan', 'Jumlah RAB Komponen', 'Total Anggaran (Rp)', 'Aksi'].map((header) => <th key={header}>{header}</th>)}</tr> : <tr>{tableHeaders.map((header, index) => <th className={!header || header === 'Aksi' ? 'workflow-actions-heading' : undefined} key={`${header}-${index}`}>{header || <span className="sr-only">Aksi</span>}</th>)}</tr>}</thead><tbody>
         {view === 'materialRecap' ? tableRows() : tableRows()}

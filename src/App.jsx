@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Activity, ArrowDownToLine, ArrowUpFromLine, BarChart3, Boxes, Check, ChevronDown,
+  Activity, ArrowDownToLine, ArrowUpFromLine, Boxes, Check, ChevronDown,
   CircleAlert, ClipboardList, Cloud, Database, FileSpreadsheet, FolderKanban, Gauge, LayoutDashboard, LoaderCircle,
   ArrowUpRight, FileText, LockKeyhole, LogIn, LogOut, MapPin, PanelLeftClose, PanelLeftOpen, Pencil, PhoneCall, Plus, Search, Settings2, ShieldCheck, Upload, Users, Wrench, X, Zap,
 } from 'lucide-react'
@@ -27,7 +27,6 @@ const SESSION_KEY = 'rab-monitor-session-v1'
 const YEAR_OPTIONS = ['2024', '2025', '2026', '2027', '2028', '2029', '2030']
 const EMPTY_COLLECTIONS = { materials: [], activityCatalog: [], components: [], activities: [], paTransfers: [], materialRecap: [], realizations: [] }
 const WORKFLOW_NAV = [
-  { id: 'contracts', label: 'Data Kontrak', icon: FileText },
   { id: 'realizations', label: 'Realisasi', icon: Activity },
 ]
 const MONITORING_NAV = [
@@ -348,19 +347,6 @@ function App() {
   }), [dashboardRecords, searchTerm])
   const latestPrkRecords = useMemo(() => filteredRecords
     .filter((record) => String(record.prk ?? '').trim().length > 0), [filteredRecords])
-  const totals = useMemo(() => auth ? ({
-    prk: budgetSummaryRecords.reduce((sum, record) => sum + Number(record.totalFinal || record.totalPrk || 0), 0),
-    rab: budgetSummaryRecords.reduce((sum, record) => sum + Number(record.rabTotal || 0), 0),
-    contract: contractDetailRecords.reduce((sum, record) => sum + Number(record.contractValue || 0), 0),
-    paid: dashboardRecords.reduce((sum, record) => sum + Number(record.paid || 0), 0),
-    billed: dashboardRecords.reduce((sum, record) => sum + Number(record.billed || 0), 0),
-  }) : dashboardRecords.reduce((sum, record) => ({
-    prk: sum.prk + Number(record.totalFinal || record.totalPrk || 0),
-    rab: sum.rab + Number(record.rabTotal || 0),
-    contract: sum.contract + Number(record.contractValue || 0),
-    paid: sum.paid + Number(record.paid || 0),
-    billed: sum.billed + Number(record.billed || 0),
-  }), { prk: 0, rab: 0, contract: 0, paid: 0, billed: 0 }), [auth, budgetSummaryRecords, contractDetailRecords, dashboardRecords])
   const chartData = useMemo(() => {
     const groups = {}
     if (!auth) {
@@ -846,10 +832,6 @@ function App() {
   const canEdit = Boolean(auth && auth.user.role !== 'viewer' && authDataReady && !authDataLoading)
   const isAdmin = auth?.user.role === 'admin'
   const isMonitoringView = activeView.startsWith('monitoring-')
-  const dashboardRecordCount = auth
-    ? dashboardRecords.length
-    : dashboardRecords.reduce((sum, record) => sum + Number(record.publicCount || 0), 0)
-
   return (
     <div className={`app-shell min-h-screen ${sidebarOpen ? 'sidebar-expanded' : 'sidebar-collapsed'} ${auth ? 'authenticated-layout' : 'public-layout'}`}>
       {sidebarOpen && <aside className="sidebar sidebar-open">
@@ -870,14 +852,14 @@ function App() {
               <button className={activeView === 'activities' ? 'nav-item nav-subitem active' : 'nav-item nav-subitem'} onClick={() => setActiveView('activities')}><ClipboardList size={16} /><span>Rekap RAB</span><span className="nav-count">{workflowCollections.components.length}</span></button>
             </div>}
           </div>}
+          {auth && <button className={activeView === 'data' ? 'nav-item active' : 'nav-item'} onClick={() => setActiveView('data')}><FolderKanban size={18} /><span>Detail AI</span><span className="nav-count">{records.length}</span></button>}
           {auth && WORKFLOW_NAV.map((item) => {
             const Icon = item.icon
             return <div className="nav-group" key={item.id}>
               {item.section && <div className="nav-section-label">{item.section}</div>}
-              <button className={activeView === item.id ? 'nav-item active' : 'nav-item'} onClick={() => setActiveView(item.id)}><Icon size={18} /><span>{item.label}</span><span className="nav-count">{item.id === 'contracts' ? contractRecords.length : workflowCollections[item.collection || item.id]?.length || 0}</span></button>
+              <button className={activeView === item.id ? 'nav-item active' : 'nav-item'} onClick={() => setActiveView(item.id)}><Icon size={18} /><span>{item.label}</span><span className="nav-count">{workflowCollections[item.collection || item.id]?.length || 0}</span></button>
             </div>
           })}
-          {auth && <button className={activeView === 'data' ? 'nav-item active' : 'nav-item'} onClick={() => setActiveView('data')}><FolderKanban size={18} /><span>Detail AI</span><span className="nav-count">{records.length}</span></button>}
           {auth && <div className="nav-management">
             <button className={`nav-item${activeView.startsWith('monitoring-') ? ' active' : ''}`} aria-expanded={monitoringOpen} onClick={() => setMonitoringOpen((open) => !open)}>
               <Activity size={18} /><span>Monitoring</span><ChevronDown className={`nav-chevron${monitoringOpen ? ' is-open' : ''}`} size={15} />
@@ -890,12 +872,13 @@ function App() {
             </div>}
           </div>}
           {auth && <div className="nav-management">
-            <button className={`nav-item${['materials', 'activityCatalog', 'users'].includes(activeView) ? ' active' : ''}`} aria-expanded={managementOpen} onClick={() => setManagementOpen((open) => !open)}>
+            <button className={`nav-item${['materials', 'activityCatalog', 'contracts', 'users'].includes(activeView) ? ' active' : ''}`} aria-expanded={managementOpen} onClick={() => setManagementOpen((open) => !open)}>
               <Settings2 size={18} /><span>Manajemen</span><ChevronDown className={`nav-chevron${managementOpen ? ' is-open' : ''}`} size={15} />
             </button>
             {managementOpen && <div className="nav-submenu">
               <button className={activeView === 'materials' ? 'nav-item nav-subitem active' : 'nav-item nav-subitem'} onClick={() => setActiveView('materials')}><Boxes size={16} /><span>Input Material</span></button>
               <button className={activeView === 'activityCatalog' ? 'nav-item nav-subitem active' : 'nav-item nav-subitem'} onClick={() => setActiveView('activityCatalog')}><ClipboardList size={16} /><span>Master Kegiatan</span></button>
+              <button className={activeView === 'contracts' ? 'nav-item nav-subitem active' : 'nav-item nav-subitem'} onClick={() => setActiveView('contracts')}><FileText size={16} /><span>Data Kontrak</span><span className="nav-count">{contractRecords.length}</span></button>
               {isAdmin && <button className={activeView === 'users' ? 'nav-item nav-subitem active' : 'nav-item nav-subitem'} onClick={() => setActiveView('users')}><Users size={16} /><span>Manajemen User</span></button>}
             </div>}
           </div>}
@@ -1337,7 +1320,14 @@ function UserManagement() {
   }
 
   useEffect(() => {
-    reloadUsers().catch((error) => setNotice(error.message))
+    const loadUsers = async () => {
+      try {
+        await reloadUsers()
+      } catch (error) {
+        setNotice(error.message)
+      }
+    }
+    loadUsers()
   }, [])
 
   async function save(event) {

@@ -51,11 +51,11 @@ const FILTER_FIELDS = {
 }
 
 const KPI_FIELDS = {
-  spb: [['VOL SPB', 'Data (Volume SPB)'], ['VOL DTG', 'Sudah datang'], ['VOL BLM DTG', 'Belum datang'], ['PROGRES PERSENTASE', 'Progres kedatangan']],
+  spb: [['TOTAL DATA SPB', 'TOTAL DATA SPB'], ['VOL SPB', 'Data (Volume SPB)'], ['VOL DTG', 'Sudah datang'], ['VOL BLM DTG', 'Belum datang'], ['PROGRES PERSENTASE', 'Progres kedatangan']],
   stock: [['NORMALISASI', 'Material terdaftar'], ['VOL 61', 'Stok POS 61'], ['VOL 62', 'Stok POS 62'], ['VOL GUDANG', 'Stok gudang']],
   load: [['PENYULANG', 'Penyulang'], ['BEBAN SIANG', 'Beban siang'], ['BEBAN MALAM', 'Beban malam'], ['% PEMBEBANAN PENYULANG', 'Rata-rata beban']],
   rabDatabase: [['ID RAB', 'ID RAB'], ['PRK', 'PRK'], ['URAIAN MATERIAL', 'Baris material'], ['VOLUME', 'Total volume']],
-  tibet: [['NOMOR KR', 'Nomor KR'], ['NO PK', 'Jumlah Nomor PK'], ['VOL PK', 'Total Vol PK'], ['VOL PASANG', 'Volume terpasang']],
+  tibet: [['NOMOR KR', 'Jumlah KR'], ['NO PK', 'Jumlah PK'], ['SISA KR', 'Sisa KR'], ['SISA PK', 'Sisa PK'], ['VOL PASANG', 'Terpasang']],
   vendor: [['NOMOR KONTRAK', 'Kontrak vendor'], ['VENDOR', 'Nama Vendor'], ['NILAI KONTRAK', 'Nilai kontrak'], ['REALISASI (Rp)', 'Total realisasi'], ['SISA KONTRAK', 'Sisa kontrak']],
   customers: [['NAMA', 'Pelanggan terdata'], ['PK', 'PK sudah'], ['ULP', 'ULP'], ['DAYA', 'Total daya'], ['PROGRESS', 'Sudah nyala']],
 }
@@ -132,7 +132,8 @@ function buildMetrics(moduleId, dataset, rows, selectedFilters = {}) {
     const index = getColumnIndex(headers, field)
     let value = 0
     if (moduleId === 'spb') {
-      value = field === 'PROGRES PERSENTASE'
+      value = field === 'TOTAL DATA SPB' ? rows.length
+        : field === 'PROGRES PERSENTASE'
         ? (sumColumn(rows, getColumnIndex(headers, 'VOL SPB')) > 0
           ? (sumColumn(rows, getColumnIndex(headers, 'VOL DTG')) / sumColumn(rows, getColumnIndex(headers, 'VOL SPB'))) * 100
           : 0)
@@ -148,7 +149,11 @@ function buildMetrics(moduleId, dataset, rows, selectedFilters = {}) {
         : field === 'URAIAN MATERIAL' ? rows.filter((row) => cell(row, index)).length
           : sumColumn(rows, index)
     } else if (moduleId === 'tibet') {
-      value = field === 'NOMOR KR' || field === 'NO PK' ? uniqueCount(rows, index) : sumColumn(rows, index)
+      if (field === 'NOMOR KR' || field === 'NO PK') value = uniqueCount(rows, index)
+      else if (field === 'VOL PASANG') {
+        const pkIndex = getColumnIndex(headers, 'NO PK')
+        value = sumColumn(rows.filter((row) => !String(cell(row, pkIndex)).trim()), index)
+      } else value = sumColumn(rows, index)
     } else if (moduleId === 'vendor') {
       if (field === 'NOMOR KONTRAK') value = uniqueCount(rows, index)
       else if (field === 'VENDOR') {
