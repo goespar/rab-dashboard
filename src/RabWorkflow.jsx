@@ -19,7 +19,7 @@ const VIEW_META = {
 }
 
 const EMPTY_FORM = {
-  materials: { code: '', prk: '', workPackage: '', componentActivity: '', name: '', unit: '', criteria: 'TR', materialPrice: '', servicePrice: '', source: 'NON MDU', notes: '' },
+  materials: { code: '', componentActivity: '', name: '', unit: '', criteria: 'TR', materialPrice: '', servicePrice: '', source: 'NON MDU', operation: '', notes: '' },
   activityCatalog: { workPackage: '', name: '', unit: '', prk: '', criteria: 'TR', notes: '' },
   components: { criteria: 'TR', activity: '', workPackage: '', prk: '', prkFix: '', program: '', year: '', status: '', rabNumber: '', paNumber: '', rabTitle: '', programRecordId: '', name: '', materialId: '', quantityPerUnit: '1', unit: '', materialPrice: '', servicePrice: '', materialVolumes: {}, notes: '' },
   activities: { rabNumber: '', rabTitle: '', paNumber: '', programRecordId: '', prk: '', position: '', criteria: 'TR', workPackage: '', year: new Date().getFullYear(), notes: '' },
@@ -168,18 +168,28 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
     .map((activity) => [normalizeWorkName(activity.name), activity]))
     .values()]
     .map((activity) => ({ value: activity.name, label: `${activity.name}${activity.unit ? ` (${activity.unit})` : ''}` }))
-  const materialActivityChoices = [...new Map(activityCatalog
-    .filter((activity) => String(activity.prk || '').trim() === String(form.prk || '').trim()
-      && normalizeWorkName(activity.workPackage) === normalizeWorkName(form.workPackage)
-      && String(activity.name || '').trim())
-    .map((activity) => [normalizeWorkName(activity.name), activity]))
-    .values()]
-    .map((activity) => ({ value: activity.name, label: `${activity.name}${activity.unit ? ` (${activity.unit})` : ''}` }))
+  const materialActivityChoices = [...activityCatalog.reduce((choices, activity) => {
+    const name = String(activity.name || '').trim()
+    const key = normalizeWorkName(name)
+    if (!key) return choices
+    const choice = choices.get(key) || { name, unit: activity.unit, references: new Set() }
+    const reference = [activity.prk, activity.workPackage].map((value) => String(value || '').trim()).filter(Boolean).join(' | ')
+    if (reference) choice.references.add(reference)
+    choices.set(key, choice)
+    return choices
+  }, new Map()).values()]
+    .map(({ name, unit, references }) => ({
+      value: name,
+      label: `${name}${unit ? ` (${unit})` : ''}${references.size ? ` — ${[...references].join('; ')}` : ''}`,
+    }))
+  if (editingId && form.componentActivity && !materialActivityChoices.some((choice) =>
+    normalizeWorkName(choice.value) === normalizeWorkName(form.componentActivity)
+  )) {
+    materialActivityChoices.push({ value: form.componentActivity, label: `${form.componentActivity} (data lama)` })
+  }
   const selectedMaterialActivity = activityCatalog.find((activity) =>
-    String(activity.prk || '').trim() === String(form.prk || '').trim()
-      && normalizeWorkName(activity.workPackage) === normalizeWorkName(form.workPackage)
-      && normalizeWorkName(activity.name) === normalizeWorkName(form.componentActivity)
-  )
+    normalizeWorkName(activity.name) === normalizeWorkName(form.componentActivity)
+  ) || (editingId && form.componentActivity ? { name: form.componentActivity } : null)
   const activityWorkPackageChoices = [...new Map(activityCatalog
     .filter((activity) => String(activity.prk || '').trim() === String(form.prk || '').trim() && String(activity.workPackage || '').trim())
     .map((activity) => [normalizeWorkName(activity.workPackage), activity.workPackage.trim()]))
@@ -682,22 +692,13 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
     }))
   }
 
-  function updateMaterialPrkSelection(prk) {
-    setSaveStatus(null)
-    setForm((current) => ({ ...current, prk: String(prk).trim(), workPackage: '', componentActivity: '' }))
-  }
-
-  function updateMaterialWorkPackage(workPackage) {
-    setSaveStatus(null)
-    setForm((current) => ({ ...current, workPackage, componentActivity: '' }))
-  }
-
   function updateMaterialActivity(componentActivity) {
-    const catalogActivity = activityCatalog.find((activity) =>
-      String(activity.prk || '').trim() === String(form.prk || '').trim()
-        && normalizeWorkName(activity.workPackage) === normalizeWorkName(form.workPackage)
-        && normalizeWorkName(activity.name) === normalizeWorkName(componentActivity)
+    const matchingActivities = activityCatalog.filter((activity) =>
+      normalizeWorkName(activity.name) === normalizeWorkName(componentActivity)
     )
+    const catalogActivity = matchingActivities.find((activity) =>
+      normalizeCriteria(activity.criteria) === normalizeCriteria(form.criteria)
+    ) || matchingActivities[0]
     setSaveStatus(null)
     setForm((current) => ({
       ...current,
@@ -855,7 +856,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
         return
       }
       if (view === 'materials' && !selectedMaterialActivity) {
-        throw new Error('Pilih No. PRK acuan, paket pekerjaan, dan nama kegiatan/komponen dari Master Kegiatan terlebih dahulu.')
+        throw new Error('Pilih nama kegiatan/komponen dari Master Kegiatan terlebih dahulu.')
       }
       const originalRecord = view === 'activityCatalog' && editingRecordIndex >= 0
         ? rows[editingRecordIndex]
@@ -1193,14 +1194,10 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
           normalizeWorkName(activity.name) === normalizeWorkName(record.componentActivity)
         )
         const linkedActivity = nameMatches.find((activity) =>
-          String(activity.prk || '').trim() === String(record.prk || '').trim()
-            && normalizeWorkName(activity.workPackage) === normalizeWorkName(record.workPackage)
-        ) || (nameMatches.length === 1 ? nameMatches[0] : null)
-        if (linkedActivity) {
-          nextForm.prk = record.prk || linkedActivity.prk || ''
-          nextForm.workPackage = record.workPackage || linkedActivity.workPackage || ''
-          nextForm.componentActivity = record.componentActivity || linkedActivity.name || ''
-        }
+          normalizeCriteria(activity.criteria) === normalizeCriteria(record.criteria)
+        ) || nameMatches[0]
+        nextForm.componentActivity = record.componentActivity || linkedActivity?.name || ''
+        if (!record.criteria && linkedActivity?.criteria) nextForm.criteria = linkedActivity.criteria
       }
       setForm(nextForm)
     }
@@ -1412,9 +1409,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
 
   function formFields() {
     if (view === 'materials') return <>
-      {activityCatalog.length === 0 && <div className="workflow-hint workflow-rab-step-full">Buat atau impor Master Kegiatan terlebih dahulu. Setiap material harus terhubung ke PRK, paket pekerjaan, dan nama kegiatan/komponen.</div>}
-      {field('prk', 'No. PRK acuan', { choices: activityPrkChoices, onChange: updateMaterialPrkSelection, searchable: true })}
-      {field('workPackage', 'Paket pekerjaan', { choices: activityWorkPackageChoices, onChange: updateMaterialWorkPackage, searchable: true })}
+      {activityCatalog.length === 0 && <div className="workflow-hint workflow-rab-step-full">Buat atau impor Master Kegiatan terlebih dahulu agar material dapat dihubungkan ke nama kegiatan/komponen.</div>}
       {field('componentActivity', 'Nama kegiatan/komponen', { choices: materialActivityChoices, onChange: updateMaterialActivity, searchable: true })}
       {field('code', 'Kode material', { required: false, placeholder: 'Contoh: MTR-001' })}
       {field('name', 'Uraian material', { placeholder: 'Nama material sesuai standar' })}
@@ -1423,6 +1418,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
       {field('materialPrice', 'Harga material (Rp)', { type: 'number', step: '1', placeholder: '0' })}
       {field('servicePrice', 'Tarif jasa tunggal (Rp)', { type: 'number', step: '1', placeholder: '0', required: false })}
       {field('source', 'Jenis material', { choices: [{ value: 'MDU', label: 'MDU' }, { value: 'NON MDU', label: 'NON MDU' }] })}
+      {field('operation', 'Keterangan', { required: false, placeholder: 'Contoh: Pasang' })}
     </>
     if (view === 'activityCatalog') return <>
       {field('workPackage', 'Paket pekerjaan', { required: false, placeholder: 'Contoh: Pembangunan jaringan' })}
@@ -1812,11 +1808,11 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
         ]
       })
     }
-    return filteredRows.map((row) => <tr key={row.id}><td>{row.code || '-'}</td><td>{row.prk || '-'}</td><td>{row.workPackage || '-'}</td><td>{row.componentActivity || '-'}</td><td>{row.name}</td><td>{row.criteria}</td><td>{row.unit}</td><td>{row.source || '-'}</td><td>{formatCurrency(row.materialPrice)}</td><td>{formatCurrency(row.servicePrice ?? (number(row.installPrice) + number(row.removalPrice)))}</td>{rowActions(row, 'material')}</tr>)
+    return filteredRows.map((row) => <tr key={row.id}><td>{row.name}</td><td>{row.unit || '-'}</td><td>{formatCurrency(row.materialPrice)}</td><td>{formatCurrency(row.servicePrice ?? (number(row.installPrice) + number(row.removalPrice)))}</td><td>{row.componentActivity || '-'}</td><td>{row.operation || '-'}</td><td>{row.criteria || '-'}</td><td>{row.source || '-'}</td>{rowActions(row, 'material')}</tr>)
   }
 
   const tableHeaders = {
-    materials: ['Kode', 'No. PRK acuan', 'Paket pekerjaan', 'Nama kegiatan/komponen', 'Uraian material', 'Kriteria', 'Satuan', 'Jenis', 'Harga material', 'Tarif jasa', ''],
+    materials: ['Uraian', 'SAT', 'Harga Material', 'Harga Jasa', 'Komponen Pekerjaan', 'Keterangan', 'Kriteria', 'MDU/NON MDU', ''],
     activityCatalog: ['Paket pekerjaan', 'Nama kegiatan', 'Satuan', 'Kriteria', 'No. PRK acuan', ''],
     components: ['No', 'Uraian Material', 'Volume', 'Satuan', 'Harga satuan material', 'Harga satuan jasa', 'Bagian material', 'Bagian jasa', 'Jumlah', 'Aksi'],
     activities: ['No', 'Uraian Komponen', 'Jumlah material', 'Jumlah jasa', 'Jumlah', 'Aksi'],
@@ -2015,7 +2011,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
         {view === 'materialRecap' && activities.length === 0 && <div className="workflow-hint">Buat RAB kegiatan terlebih dahulu. Kebutuhan material akan direkap dari komponen RAB.</div>}
         {view === 'realizations' && <div className="workflow-hint">{realizationActivities.length ? 'Pilih No. PRK terlebih dahulu, lalu cari kegiatan RAB.' : 'Belum ada Input RAB. Simpan komponen melalui menu Input RAB terlebih dahulu.'}</div>}
         {view !== 'activities' && <form className="workflow-form" onSubmit={submit}>
-          <div className="workflow-fields">{formFields()}{view !== 'paFinalization' && field('notes', 'Catatan', { required: false, placeholder: 'Opsional' })}</div>
+          <div className="workflow-fields">{formFields()}{view !== 'paFinalization' && view !== 'materials' && field('notes', 'Catatan', { required: false, placeholder: 'Opsional' })}</div>
           {view === 'components' && form.name && <div className="workflow-tax-summary workflow-input-rab-tax workflow-rab-step-full"><div><span>Subtotal RAB</span><strong>{formatCurrency(inputRabSubtotal)}</strong></div><div><span>DPP (11/12)</span><strong>{formatCurrency(inputRabDpp)}</strong></div><div><span>PPN 12%</span><strong>{formatCurrency(inputRabPpn)}</strong></div><div className="workflow-tax-total"><span>TOTAL ANGGARAN — akan masuk kolom M</span><strong>{formatCurrency(inputRabTotalAnggaran)}</strong></div></div>}
           {view !== 'paFinalization' && <div className={`workflow-form-footer ${view === 'components' ? 'workflow-rab-save-footer' : ''}`}><span>* Wajib diisi</span><div className="workflow-form-actions">{isFormEditing && <button className="button button-secondary" type="button" disabled={saving} onClick={() => { setForm({ ...EMPTY_FORM[view] }); setEditingId(''); setEditingRecordIndex(-1); setSaveStatus(null) }}><X size={14} />Batal edit</button>}<button className="button button-primary" type="submit" disabled={saving || (view === 'materials' && !selectedMaterialActivity) || (view === 'materialRecap' && activities.length === 0) || (view === 'realizations' && realizationActivities.length === 0) || (view === 'components' && activityCatalog.length > 0 && (!form.prk || !form.workPackage || !form.name || activityLineItems.length === 0))}>{saving ? <><span className="workflow-save-spinner" aria-hidden="true" />Menyimpan...</> : <><Save size={15} />{view === 'components' ? 'Simpan ke Google Sheets' : isFormEditing ? 'Simpan perubahan' : 'Simpan data'}</>}</button></div></div>}
         </form>}
