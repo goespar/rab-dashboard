@@ -35,6 +35,17 @@ const MONITORING_SHEETS = {
   vendor: 'MON_KONTRAK_VENDOR',
   customers: 'MON_KEBUTUHAN_PELANGGAN',
 }
+const MONITORING_SOURCE_SPREADSHEET_ID = '1E330xkEvgia8w4n43eWIg8_854sX3VS7zqcrO5rXdWc'
+const DASHBOARD_SOURCE_SPREADSHEET_ID = '1E330xkEvgia8w4n43eWIg8_854sX3VS7zqcrO5rXdWc'
+const MONITORING_SOURCE_TABS = {
+  spb: { names: ['SPB'], required: ['NO SPB', 'URAIAN MATERIAL'] },
+  stock: { names: ['STOCK GUDANG'], required: ['NAMA MATERIAL', 'VOL GUDANG'] },
+  load: { names: ['BEBAN GI DAN PYL'], required: ['PENYULANG', 'BEBAN SIANG'] },
+  rabDatabase: { names: ['DATABASE_RAB', 'DATABASE RAB'], required: ['ID RAB', 'URAIAN MATERIAL'] },
+  tibet: { names: ['TIBET'], required: ['VENDOR', 'NOMOR KR'] },
+  vendor: { names: ['MON KONTRAK VENDOR'], required: ['NOMOR KONTRAK', 'VENDOR'] },
+  customers: { names: ['MON KEBUTUHAN PELANGGAN', 'MON PLG PERLUASAN'], required: ['NAMA', 'NO PK'] },
+}
 const WORKFLOW_COLUMNS = {
   materials: [
     ['ID', 'id'], ['Kode', 'code'], ['Uraian Material', 'name'], ['Satuan', 'unit'], ['Kriteria', 'criteria'],
@@ -112,11 +123,18 @@ function doGet(event) {
   if (action === 'health') return json_({ ok: true, service: 'RAB Monitor' })
   if (action === 'authStatus') return json_({ ok: true, ...authStatus_() })
   if (action === 'publicDashboard') return json_({ ok: true, summary: cachedPublicDashboard_() })
-  if (action !== 'loadWorkflow' && action !== 'load' && action !== 'loadMonitoring') return json_({ ok: false, error: 'Aksi tidak dikenal.' })
+  if (action !== 'loadWorkflow' && action !== 'load' && action !== 'loadMonitoring' && action !== 'loadMonitoringSource') return json_({ ok: false, error: 'Aksi tidak dikenal.' })
   const authorization = authorize_(event.parameter.token)
   if (!authorization.ok) return json_({ ok: false, error: authorization.error, code: 'AUTH_REQUIRED' })
   if (action === 'loadWorkflow') return json_({ ok: true, collections: loadWorkflow_(), user: authorization.user })
   if (action === 'loadMonitoring') return json_({ ok: true, datasets: loadMonitoring_(), user: authorization.user })
+  if (action === 'loadMonitoringSource') {
+    try {
+      return json_({ ok: true, datasets: loadMonitoringSource_(), user: authorization.user })
+    } catch (error) {
+      return json_({ ok: false, error: error.message || 'Data Google Sheets sumber gagal dimuat.' })
+    }
+  }
   const sheet = getDataSheet_()
   syncPrkRemainingColumn_(sheet)
   const values = sheet.getDataRange().getValues()
@@ -151,6 +169,13 @@ function doPost(event) {
     return json_(saveUser_(payload.user))
   }
   if (authorization.user.role === 'viewer') return json_({ ok: false, error: 'Akun viewer hanya memiliki akses baca.' })
+  if (payload.action === 'syncDashboardSource') {
+    try {
+      return json_({ ok: true, ...syncDashboardFromSource_() })
+    } catch (error) {
+      return json_({ ok: false, error: error.message || 'Sinkronisasi Dashboard AI gagal.' })
+    }
+  }
   if (payload.action === 'saveMonitoring') {
     try {
       const result = saveMonitoring_(payload.datasets)
@@ -264,6 +289,223 @@ function loadMonitoring_() {
     datasets[moduleId] = { sheetName: MONITORING_SHEETS[moduleId], headers, rows }
   })
   return datasets
+}
+
+function loadMonitoringSource_() {
+  const sourceId = PropertiesService.getScriptProperties().getProperty('MONITORING_SOURCE_SPREADSHEET_ID')
+    || MONITORING_SOURCE_SPREADSHEET_ID
+  const spreadsheet = SpreadsheetApp.openById(sourceId)
+  const datasets = {}
+  const missing = []
+
+  Object.keys(MONITORING_SOURCE_TABS).forEach((moduleId) => {
+    const config = MONITORING_SOURCE_TABS[moduleId]
+    const sheet = config.names.map((name) => findMonitoringSourceSheet_(spreadsheet, name)).find(Boolean)
+    if (!sheet || sheet.getLastRow() < 1 || sheet.getLastColumn() < 1) {
+      missing.push(config.names[0])
+      return
+    }
+
+    const values = sheet.getDataRange().getValues()
+    const required = config.required.map(monitoringHeaderKey_)
+    let headerRow = -1
+    let bestScore = 0
+    const searchLimit = Math.min(values.length, 15)
+    for (let rowIndex = 0; rowIndex < searchLimit; rowIndex += 1) {
+      const score = required.filter((header) => values[rowIndex].some((value) => monitoringHeaderKey_(value) === header)).length
+      if (score > bestScore) {
+        bestScore = score
+        headerRow = rowIndex
+      }
+    }
+    if (bestScore !== required.length) {
+      throw new Error(`Header pada sheet "${sheet.getName()}" tidak sesuai untuk menu Monitoring.`)
+    }
+
+    const columnCount = moduleId === 'vendor' ? Math.min(29, values[headerRow].length) : values[headerRow].length
+    const seenHeaders = {}
+    const headers = values[headerRow].slice(0, columnCount).map((value, index) => {
+      const label = String(value || (moduleId === 'vendor' && index === 28 ? 'STATUS KONTRAK' : `Kolom ${index + 1}`)).trim()
+      const key = monitoringHeaderKey_(label)
+      seenHeaders[key] = (seenHeaders[key] || 0) + 1
+      return seenHeaders[key] > 1 ? `${label} (${seenHeaders[key]})` : label
+    })
+    const rows = values.slice(headerRow + 1)
+      .filter((row) => row.some((value) => value !== '' && value !== null))
+      .map((row) => headers.map((_, column) => row[column] === null || row[column] === undefined ? '' : row[column]))
+    datasets[moduleId] = { sheetName: sheet.getName(), headers, rows }
+  })
+
+  if (missing.length) {
+    throw new Error(`Sheet sumber berikut belum ditemukan atau kosong: ${missing.join(', ')}.`)
+  }
+  return datasets
+}
+
+function findMonitoringSourceSheet_(spreadsheet, name) {
+  const exactMatch = spreadsheet.getSheetByName(name)
+  if (exactMatch) return exactMatch
+  const normalizedName = monitoringHeaderKey_(name)
+  return spreadsheet.getSheets().find((sheet) => monitoringHeaderKey_(sheet.getName()) === normalizedName) || null
+}
+
+function monitoringHeaderKey_(value) {
+  return String(value === null || value === undefined ? '' : value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+}
+
+function syncDashboardFromSource_() {
+  const lock = LockService.getScriptLock()
+  lock.waitLock(10000)
+  try {
+    const sourceId = PropertiesService.getScriptProperties().getProperty('DASHBOARD_SOURCE_SPREADSHEET_ID')
+      || DASHBOARD_SOURCE_SPREADSHEET_ID
+    const destinationId = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID')
+    const activeSpreadsheet = destinationId ? null : SpreadsheetApp.getActiveSpreadsheet()
+    if (sourceId === destinationId || (activeSpreadsheet && sourceId === activeSpreadsheet.getId())) {
+      throw new Error('Spreadsheet sumber dan tujuan sama. Periksa Script Properties SPREADSHEET_ID.')
+    }
+    const sourceSpreadsheet = SpreadsheetApp.openById(sourceId)
+    const sourceSheet = findMonitoringSourceSheet_(sourceSpreadsheet, 'DATA AI')
+    if (!sourceSheet || sourceSheet.getLastRow() < 1 || sourceSheet.getLastColumn() < 1) {
+      throw new Error('Sheet DATA AI tidak ditemukan atau kosong pada spreadsheet sumber.')
+    }
+
+    const sourceValues = sourceSheet.getDataRange().getValues()
+    const requiredHeaders = ['NOPRK', 'URAIAN', 'TOTALRAB', 'NILAIKONTRAK']
+    let sourceHeaderRow = -1
+    for (let rowIndex = 0; rowIndex < Math.min(sourceValues.length, 15); rowIndex += 1) {
+      const rowHeaders = sourceValues[rowIndex].map(monitoringHeaderKey_)
+      if (requiredHeaders.every((header) => rowHeaders.includes(header))) {
+        sourceHeaderRow = rowIndex
+        break
+      }
+    }
+    if (sourceHeaderRow < 0) {
+      throw new Error('Header sheet DATA AI tidak sesuai. Diperlukan NO.PRK, URAIAN, TOTAL RAB, dan NILAI KONTRAK.')
+    }
+
+    const sourceHeaders = sourceValues[sourceHeaderRow].map((header) => String(header || '').trim())
+    const destinationSheet = getDataSheet_()
+    const destinationValues = destinationSheet.getDataRange().getValues()
+    const destinationHeaders = DATA_HEADERS
+    const sourceIndexesByKey = monitoringHeaderIndexes_(sourceHeaders)
+    const destinationIndexesByKey = monitoringHeaderIndexes_(destinationHeaders)
+    const mappedColumns = []
+    destinationIndexesByKey.forEach((destinationIndex, key) => {
+      const sourceIndex = sourceIndexesByKey.get(key)
+      if (sourceIndex !== undefined) mappedColumns.push([sourceIndex, destinationIndex])
+    })
+    if (!mappedColumns.some(([, destinationIndex]) => destinationHeaders[destinationIndex] === 'NO.PRK')
+      || !mappedColumns.some(([, destinationIndex]) => destinationHeaders[destinationIndex] === 'URAIAN')) {
+      throw new Error('Kolom NO.PRK atau URAIAN tidak dapat dipetakan dari DATA AI.')
+    }
+
+    const existingHeaders = destinationValues[0] || []
+    const existingRows = destinationValues.slice(1).filter((row) => row.some((value) => value !== '' && value !== null))
+    const existingIndexesByKey = monitoringHeaderIndexes_(existingHeaders)
+    const identityHeaders = ['NO.RAB', 'NO.PA', 'NO.WBS']
+    const identityIndexes = identityHeaders.map((header) => {
+      const key = `${monitoringHeaderKey_(header)}#1`
+      return [existingIndexesByKey.get(key), sourceIndexesByKey.get(key)]
+    })
+    const prkIndexes = [
+      existingIndexesByKey.get('NOPRK#1'),
+      sourceIndexesByKey.get('NOPRK#1'),
+    ]
+    const descriptionIndexes = [
+      existingIndexesByKey.get('URAIAN#1'),
+      sourceIndexesByKey.get('URAIAN#1'),
+    ]
+    const positionIndexes = [
+      existingIndexesByKey.get('POSANGGARAN#1'),
+      sourceIndexesByKey.get('POSANGGARAN#1'),
+    ]
+    const identityKey = (row, isSource) => {
+      for (let identityIndex = 0; identityIndex < identityIndexes.length; identityIndex += 1) {
+        const [existingIndex, sourceIndex] = identityIndexes[identityIndex]
+        const index = isSource ? sourceIndex : existingIndex
+        const value = index === undefined ? '' : String(row[index] ?? '').trim()
+        if (value) return `${identityHeaders[identityIndex]}:${normalizeIdentityValue_(value)}`
+      }
+      const [prkIndex, descriptionIndex, positionIndex] = isSource
+        ? [prkIndexes[1], descriptionIndexes[1], positionIndexes[1]]
+        : [prkIndexes[0], descriptionIndexes[0], positionIndexes[0]]
+      const values = [prkIndex, descriptionIndex, positionIndex]
+        .map((index) => index === undefined ? '' : normalizeIdentityValue_(row[index]))
+      return values.some(Boolean) ? `ROW:${values.join('|')}` : ''
+    }
+
+    const existingByIdentity = new Map()
+    existingRows.forEach((row) => {
+      const key = identityKey(row, false)
+      if (!key) return
+      if (!existingByIdentity.has(key)) existingByIdentity.set(key, [])
+      existingByIdentity.get(key).push(row)
+    })
+    const sourceRows = sourceValues.slice(sourceHeaderRow + 1)
+      .filter((row) => row.some((value) => value !== '' && value !== null))
+    if (!sourceRows.length) throw new Error('Sheet DATA AI tidak berisi baris data untuk disinkronkan.')
+    if (sourceRows.length > 10000) throw new Error('DATA AI melebihi batas maksimum 10.000 baris.')
+
+    const recordIdIndex = destinationHeaders.indexOf('RECORD ID')
+    const rows = sourceRows.map((sourceRow) => {
+      const key = identityKey(sourceRow, true)
+      const existing = key && existingByIdentity.get(key)?.length ? existingByIdentity.get(key).shift() : null
+      const destinationHeaderCounts = new Map()
+      const destinationRow = destinationHeaders.map((header) => {
+        const normalized = monitoringHeaderKey_(header)
+        const occurrence = (destinationHeaderCounts.get(normalized) || 0) + 1
+        destinationHeaderCounts.set(normalized, occurrence)
+        const oldHeaderIndex = existingIndexesByKey.get(`${normalized}#${occurrence}`)
+        return oldHeaderIndex >= 0 && existing ? existing[oldHeaderIndex] ?? '' : ''
+      })
+      mappedColumns.forEach(([sourceIndex, destinationIndex]) => {
+        destinationRow[destinationIndex] = sourceRow[sourceIndex] === null || sourceRow[sourceIndex] === undefined
+          ? ''
+          : sourceRow[sourceIndex]
+      })
+      if (!String(destinationRow[recordIdIndex] || '').trim()) destinationRow[recordIdIndex] = Utilities.getUuid()
+      return destinationRow
+    })
+
+    destinationSheet.clearContents()
+    destinationSheet.getRange(1, 1, 1, destinationHeaders.length).setValues([destinationHeaders])
+    destinationSheet.getRange(2, 1, rows.length, destinationHeaders.length).setValues(rows)
+    formatMonthlyBillingColumns_(destinationSheet, destinationHeaders)
+    clearPublicDashboardCache_()
+
+    const records = rows.map((row, index) => {
+      const record = { sourceRow: index + 2 }
+      destinationHeaders.forEach((header, column) => { record[header] = row[column] })
+      return toClientRecord_(record)
+    })
+    return { rows: rows.length, records, updatedAt: new Date().toISOString() }
+  } finally {
+    lock.releaseLock()
+  }
+}
+
+function monitoringHeaderIndexes_(headers) {
+  const counts = new Map()
+  const indexes = new Map()
+  headers.forEach((header, index) => {
+    const normalized = monitoringHeaderKey_(header)
+    const occurrence = (counts.get(normalized) || 0) + 1
+    counts.set(normalized, occurrence)
+    indexes.set(`${normalized}#${occurrence}`, index)
+  })
+  return indexes
+}
+
+function normalizeIdentityValue_(value) {
+  return String(value === null || value === undefined ? '' : value)
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toUpperCase()
 }
 
 function saveMonitoring_(datasets) {

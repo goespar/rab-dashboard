@@ -25,6 +25,12 @@ Apps Script memeriksa sesi untuk semua operasi tulis dan pembacaan workflow. End
 
 Jika kolom `TOTAL PA` kosong tetapi transfer Finalisasi ke PA tersimpan, dashboard memakai saldo kumulatif dari riwayat transfer untuk mengisi tampilan. Pencocokan dilakukan dengan ID data, lalu nomor RAB atau PRK sebagai cadangan. Baris finalisasi tetap ditampilkan meskipun `TOTAL AKHIR` kosong; baris rincian RAB tanpa transfer yang cocok tetap dikecualikan. Data publik hanya menyertakan penanda boolean `paFinalized`, bukan rincian transfer. Deploy ulang versi Apps Script setelah perubahan pada `apps-script/Code.gs` agar pemulihan saldo ini aktif pada endpoint publik.
 
+## Sinkronisasi Dashboard AI
+
+Tombol **Sinkron DATA AI** pada Dashboard membaca tab `DATA AI` dari spreadsheet sumber `1E330xkEvgia8w4n43eWIg8_854sX3VS7zqcrO5rXdWc` dan mengganti daftar baris di `RABData` pada spreadsheet tujuan yang ditentukan oleh Script Property `SPREADSHEET_ID`. Jika diperlukan, ID spreadsheet sumber dapat diubah lewat Script Property `DASHBOARD_SOURCE_SPREADSHEET_ID`. Kolom dicocokkan berdasarkan nama header, bukan urutan, sehingga perbedaan posisi `RECORD ID` tidak menggeser data.
+
+Setelah konfirmasi, nilai kolom yang tersedia pada sumber mengikuti `DATA AI` (termasuk nilai kosong). Untuk baris yang cocok melalui No. RAB, No. PA, No. WBS, atau kombinasi PRK/uraian/pos anggaran, aplikasi mempertahankan `RECORD ID` serta kolom aplikasi yang tidak tersedia pada sumber. Baris baru memperoleh ID baru; baris tujuan yang tidak memiliki pasangan di sumber tidak ikut dipertahankan. Deploy ulang Apps Script sebagai versi baru sebelum menggunakan tombol.
+
 Pada kunjungan pertama, dashboard publik menampilkan tombol **Setup Admin**. Isi `ADMIN_SETUP_KEY`, nama, username, dan kata sandi admin minimal 12 karakter. Setelah admin dibuat, kunci setup dihapus dari Script Properties. Admin kemudian dapat membuat akun **Tim Perencanaan** dan **Viewer** pada menu Manajemen User. Viewer hanya dapat membaca; semua perubahan juga ditolak oleh server, bukan sekadar disembunyikan di antarmuka.
 
 ## Deploy ke GitHub dan Vercel
@@ -40,6 +46,8 @@ File `api/apps-script.js` meneruskan permintaan browser ke Apps Script dari sisi
 Pilih file `.xlsx`. Aplikasi mencari sheet `DATA ANGGARAN INVESTASI` atau `DATA PENGADAAN` dengan header `NO.PRK`, `URAIAN`, `TOTAL RAB`, dan `NILAI KONTRAK`; sheet lain dengan header yang sama juga dapat digunakan. Impor mengganti seluruh dataset aktif. Ekspor menghasilkan workbook rekap A-AG.
 
 Kolom yang dipetakan meliputi No. PRK, No. PRK SKKI/Fix, No. WBS, Pos Anggaran, No. RAB, No. PA, Uraian, Total PRK, Relokasi, Revisi SKKI, Total Akhir, Total RAB/PA, No. Kontrak, Vendor, Nilai Kontrak, Pengembalian PA, Penggantian Biaya, Tagihan, Total Bayar, Sisa PRK, Program, Tahun Anggaran, Keterangan, serta kolom AA-AG: Tanggal Awal, Tanggal Akhir, Rencana Kontrak, Rencana Tagih, Progress, Proyeksi Tagih, dan Tanggal Bayar.
+
+Tombol **Impor Master** mengimpor hanya sheet `FORM MATERIAL & HARGA` dan/atau `DATABASE KEGIATAN`; file tidak perlu berisi sheet RAB. Impor ini hanya menyimpan master ke tab workflow masing-masing, tidak menulis `RABData` dan tidak menjalankan sinkronisasi atau hitung ulang total RAB. Data master manual tetap dipertahankan, sedangkan master hasil impor sebelumnya diperbarui dengan isi workbook terbaru. Perubahan master dapat memengaruhi pilihan material/kegiatan untuk entri berikutnya.
 
 Dashboard setelah login menampilkan AI Total dan ringkasan total RAB, PA, kontrak, tagihan, pembayaran, serta sisa PRK. Rincian Murni dan Lanjutan/Luncuran ditampilkan di bawah ringkasan utama dengan persentase dua desimal. Dashboard publik memakai tata letak ringkasan dan kartu program pada gambar revisi. Kedua dashboard hanya menghitung baris PRK yang memiliki nilai `TOTAL AKHIR` (kolom L), sehingga baris detail yang mengulang angka tidak terhitung ganda; tagihan dan pembayaran dibandingkan dengan nilai kontrak. Sisa PRK hanya dihitung dan dijumlahkan pada baris yang memiliki `NO.PRK`, dengan rumus `TOTAL AKHIR - TOTAL RAB - TOTAL PA`; baris detail tanpa No. PRK tidak menambah nilai sisa.
 
