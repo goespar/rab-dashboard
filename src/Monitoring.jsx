@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ExcelJS from 'exceljs'
 import {
-  Activity, ArrowDownToLine, ArrowUpFromLine, Boxes, Database, FileSpreadsheet, Filter, Gauge, Plus, Printer, RefreshCw,
+  Activity, ArrowDownToLine, ArrowUpFromLine, Boxes, Cloud, Database, FileSpreadsheet, Filter, Gauge, Plus, Printer, RefreshCw,
   Search, ShieldCheck, Users, X, Zap,
 } from 'lucide-react'
 import {
@@ -440,7 +440,7 @@ function MonitoringChart({ chart }) {
   </ResponsiveContainer>
 }
 
-export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onSaveMonitoring, readOnly = false }) {
+export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoadMonitoringSource, onSaveMonitoring, readOnly = false }) {
   const fileInput = useRef(null)
   const rabFileInput = useRef(null)
   const [datasets, setDatasets] = useState(readStoredDatasets)
@@ -825,6 +825,35 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onSav
     }
   }
 
+  async function handleLoadFromGoogleSheets() {
+    if (loadedCount && !window.confirm('Data Monitoring yang tersimpan di aplikasi akan diganti dengan data dari Google Sheets sumber. Lanjutkan?')) return
+    setImporting(true)
+    setImportStage('Mengambil data dari Google Sheets sumber…')
+    setError('')
+    try {
+      const imported = await onLoadMonitoringSource()
+      const missingModules = MONITORING_MODULES
+        .filter(({ id }) => !imported[id] || !Array.isArray(imported[id].headers) || !Array.isArray(imported[id].rows))
+        .map(({ label }) => label)
+      if (missingModules.length) throw new Error(`Data menu berikut tidak ditemukan: ${missingModules.join(', ')}.`)
+      const saved = await persistDatasets(
+        imported,
+        imported,
+        `Data berhasil diambil dari Google Sheets sumber dan disimpan ke tab aplikasi: ${MONITORING_MODULES.length} menu.`
+      )
+      if (!saved) return
+      setSearch('')
+      setSelectedFilters({})
+      setPage(1)
+    } catch (sourceError) {
+      console.error('Data Monitoring dari Google Sheets sumber gagal dimuat.', sourceError)
+      setError(sourceError instanceof Error ? sourceError.message : 'Data dari Google Sheets sumber gagal dimuat.')
+    } finally {
+      setImporting(false)
+      setImportStage('')
+    }
+  }
+
   return <section className="monitoring-page">
     <header className="monitoring-heading">
       <div className="monitoring-heading-icon"><Icon size={19} /></div>
@@ -838,6 +867,10 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onSav
         {cloudSaving && <span className="monitoring-import-status"><span className="monitoring-cloud-saving-dot" /> Menyimpan ke Google Sheets...</span>}
         {needsCloudMigration && !readOnly && <button className="button button-primary" type="button" onClick={migrateLocalData} disabled={cloudSaving || cloudLoading}><Database size={15} /><span>Simpan data browser ke Google Sheets</span></button>}
         <input ref={fileInput} className="monitoring-file-input" type="file" accept=".xlsx,.xlsm" onChange={handleImport} aria-label="Pilih workbook Monitoring" />
+        {!readOnly && <button className="button button-secondary" type="button" onClick={handleLoadFromGoogleSheets} disabled={importing || cloudLoading || cloudSaving}>
+          {importing ? <span className="monitoring-spinner" /> : <Cloud size={15} />}
+          <span>{importing ? 'Mengambil data…' : 'Ambil dari Google Sheets'}</span>
+        </button>}
         {isVendorModule && <>
           <button className="button button-secondary" type="button" onClick={refreshStoredData} disabled={cloudLoading || cloudSaving}><RefreshCw size={14} /><span>Refresh Data</span></button>
           {!readOnly && <button className="button button-primary" type="button" onClick={openVendorForm} disabled={cloudLoading || cloudSaving}><Plus size={15} /><span>Tambah Kontrak</span></button>}
@@ -853,7 +886,7 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onSav
 
     <div className="monitoring-import-hint">
       <FileSpreadsheet size={15} />
-      <span>Impor satu workbook <strong>MONITORING AI BARA.xlsx</strong> untuk memuat data ke seluruh 7 menu Monitoring. Data baru akan disimpan ke Google Sheets.</span>
+      <span>Ambil data langsung dari Google Sheets sumber, atau impor workbook Excel untuk memuat seluruh 7 menu Monitoring. Data yang diambil akan disimpan pada tab Monitoring milik aplikasi.</span>
     </div>
     {needsCloudMigration && <div className="monitoring-cloud-migration" role="status"><Database size={15} /><span>Data Monitoring lama ditemukan di browser ini, tetapi belum ada di Google Sheets. Pilih <strong>Simpan data browser ke Google Sheets</strong> untuk memindahkannya.</span></div>}
     {importing && <div className="monitoring-import-progress" role="status">{importStage}</div>}
@@ -901,7 +934,8 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onSav
     {!dataset ? <section className="panel monitoring-empty-state">
       <div className="monitoring-empty-icon"><FileSpreadsheet size={24} /></div>
       <h2>Mulai dengan impor data Monitoring</h2>
-      <p>Pilih workbook Excel. Sheet SPB, Stock Gudang, Beban, Database RAB, Tibet, Kontrak Vendor, dan Kebutuhan Pelanggan akan dibaca sekaligus.</p>
+      <p>Ambil data langsung dari Google Sheets sumber atau pilih workbook Excel. Sheet SPB, Stock Gudang, Beban, Database RAB, Tibet, Kontrak Vendor, dan Kebutuhan Pelanggan akan dibaca sekaligus.</p>
+      {!readOnly && <button className="button button-secondary" type="button" onClick={handleLoadFromGoogleSheets} disabled={importing || cloudLoading || cloudSaving}><Cloud size={15} /> Ambil dari Google Sheets</button>}
       <button className="button button-primary" type="button" onClick={() => fileInput.current?.click()} disabled={importing || cloudLoading || cloudSaving}><ArrowUpFromLine size={16} /> Pilih workbook</button>
     </section> : <>
       <section className={`monitoring-kpi-grid${module.id === 'tibet' ? ' monitoring-kpi-grid-tibet' : ''}`} aria-label={`Ringkasan ${module.label}`}>

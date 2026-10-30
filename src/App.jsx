@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity, ArrowDownToLine, ArrowUpFromLine, Boxes, Check, ChevronDown,
   CircleAlert, ClipboardList, Cloud, Database, FileSpreadsheet, FolderKanban, Gauge, LayoutDashboard, LoaderCircle,
-  ArrowUpRight, FileText, LockKeyhole, LogIn, LogOut, MapPin, PanelLeftClose, PanelLeftOpen, Pencil, PhoneCall, Plus, Search, Settings2, ShieldCheck, Upload, Users, Wrench, X, Zap,
+  ArrowUpRight, FileText, LockKeyhole, LogIn, LogOut, MapPin, PanelLeftClose, PanelLeftOpen, Pencil, PhoneCall, Plus, RefreshCw, Search, Settings2, ShieldCheck, Upload, Users, Wrench, X, Zap,
 } from 'lucide-react'
 import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { exportWorkbook, formatCurrency, importWorkbook, parseRupiahPrice, sampleRecords } from './lib/workbook.js'
+import { exportWorkbook, formatCurrency, importWorkbook, importWorkflowMasters, parseRupiahPrice, sampleRecords } from './lib/workbook.js'
 import { applyFinalizedPaBalances, summarizePublicDashboard } from './lib/publicDashboard.js'
 import { accumulateProjectedBilling, getPlannedBilling } from './lib/contractBilling.js'
 import { findProgramRecordForRabGroup } from './lib/rabReferences.js'
@@ -80,6 +80,24 @@ function writePublicDashboardCache(summary) {
   }
 }
 
+function mergeImportedMaster(current, imported, identityFields) {
+  const identity = (record) => identityFields
+    .map((field) => String(record[field] || '').trim().replace(/\s+/g, ' ').toUpperCase())
+    .join('|')
+  const existingByIdentity = new Map()
+  current.filter((record) => record.importedFrom).forEach((record) => {
+    const key = identity(record)
+    if (!existingByIdentity.has(key)) existingByIdentity.set(key, [])
+    existingByIdentity.get(key).push(record)
+  })
+  const importedRecords = imported.map((record) => {
+    const matches = existingByIdentity.get(identity(record))
+    const existing = matches?.shift()
+    return existing ? { ...record, id: existing.id } : record
+  })
+  return [...current.filter((record) => !record.importedFrom), ...importedRecords]
+}
+
 function publicGroupsToRecords(groups) {
   return groups.map((group, index) => ({
     id: `public-${index}`, program: group.program, year: group.year, publicCount: group.count,
@@ -109,6 +127,13 @@ async function loadMonitoringFromSheets() {
   const response = await apiGet('loadMonitoring')
   const result = await response.json()
   if (!response.ok || !result.ok) throw new Error(result.error || 'Data Monitoring gagal dimuat dari Google Sheets.')
+  return result.datasets || {}
+}
+
+async function loadMonitoringSourceFromSheets() {
+  const response = await apiGet('loadMonitoringSource')
+  const result = await response.json()
+  if (!response.ok || !result.ok) throw new Error(result.error || 'Data Monitoring dari Google Sheets sumber gagal dimuat.')
   return result.datasets || {}
 }
 
@@ -194,6 +219,10 @@ function App() {
   const [pendingImport, setPendingImport] = useState(null)
   const [importError, setImportError] = useState('')
   const [importSaving, setImportSaving] = useState(false)
+  const [dashboardSyncing, setDashboardSyncing] = useState(false)
+  const [masterImportModal, setMasterImportModal] = useState(false)
+  const [pendingMasterImport, setPendingMasterImport] = useState(null)
+  const [masterImportError, setMasterImportError] = useState('')
   const [editingRecord, setEditingRecord] = useState(null)
   const [connection, setConnection] = useState('local')
   const [notice, setNotice] = useState('')
@@ -207,6 +236,7 @@ function App() {
   const [publicLoading, setPublicLoading] = useState(true)
   const [publicError, setPublicError] = useState('')
   const fileInput = useRef(null)
+  const masterFileInput = useRef(null)
   const saveRecordsPendingRef = useRef(false)
   const importSavingRef = useRef(false)
   const clearRabEditRecord = useCallback(() => setRabEditRecordId(''), [])
@@ -318,10 +348,10 @@ function App() {
   }, [records])
 
   useEffect(() => {
-    if (!notice || logoutPending || savePending) return undefined
+    if (!notice || logoutPending || savePending || dashboardSyncing) return undefined
     const timer = window.setTimeout(() => setNotice(''), 3600)
     return () => window.clearTimeout(timer)
-  }, [notice, logoutPending, savePending])
+  }, [notice, logoutPending, savePending, dashboardSyncing])
 
   const years = YEAR_OPTIONS
   const recordsWithFinalizedPa = useMemo(
@@ -794,6 +824,67 @@ function App() {
     }
   }
 
+  async function receiveMasterFile(file) {
+    if (!file) return
+    setMasterImportError('')
+    try {
+      const result = await importWorkflowMasters(file)
+      setPendingMasterImport({ ...result, fileName: file.name })
+    } catch (error) {
+      setPendingMasterImport(null)
+      setMasterImportError(error.message)
+    }
+  }
+
+  async function confirmMasterImport() {
+    if (!pendingMasterImport || importSavingRef.current) return
+    const hasMaterials = pendingMasterImport.materials.length > 0
+    const hasActivities = pendingMasterImport.activityCatalog.length > 0
+    if (!hasMaterials && !hasActivities) return
+    const confirmed = window.confirm(
+      `Impor ${hasMaterials ? `${pendingMasterImport.materials.length} material` : ''}`
+      + `${hasMaterials && hasActivities ? ' dan ' : ''}`
+      + `${hasActivities ? `${pendingMasterImport.activityCatalog.length} kegiatan` : ''}? `
+      + 'Hanya master material/kegiatan yang akan diperbarui; data RABData dan perhitungan RAB tidak ditulis ulang.',
+    )
+    if (!confirmed) return
+    importSavingRef.current = true
+    setImportSaving(true)
+    const nextCollections = { ...workflowCollections }
+    try {
+      if (hasMaterials) {
+        const nextMaterials = mergeImportedMaster(workflowCollections.materials, pendingMasterImport.materials, [
+          'name', 'componentActivity', 'criteria', 'unit',
+        ])
+        const result = await saveWorkflowCollection('materials', nextMaterials, 'Master material diperbarui.')
+        if (!result.ok) throw new Error(result.message || 'Master material gagal disimpan.')
+        nextCollections.materials = nextMaterials
+        setWorkflowCollections(nextCollections)
+        window.localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(nextCollections))
+      }
+      if (hasActivities) {
+        const nextActivities = mergeImportedMaster(workflowCollections.activityCatalog, pendingMasterImport.activityCatalog, [
+          'prk', 'workPackage', 'name', 'unit',
+        ])
+        const result = await saveWorkflowCollection('activityCatalog', nextActivities, 'Master kegiatan diperbarui.')
+        if (!result.ok) throw new Error(result.message || 'Master kegiatan gagal disimpan.')
+        nextCollections.activityCatalog = nextActivities
+        setWorkflowCollections(nextCollections)
+        window.localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(nextCollections))
+      }
+      const importedCount = (hasMaterials ? pendingMasterImport.materials.length : 0)
+        + (hasActivities ? pendingMasterImport.activityCatalog.length : 0)
+      setNotice(`${importedCount} data master berhasil diimpor. RABData tidak diubah.`)
+      setMasterImportModal(false)
+      setPendingMasterImport(null)
+    } catch (error) {
+      setNotice(`Impor master gagal: ${error.message || 'Kesalahan penyimpanan.'}`)
+    } finally {
+      importSavingRef.current = false
+      setImportSaving(false)
+    }
+  }
+
   async function saveRecord(event) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
@@ -822,6 +913,33 @@ function App() {
   async function downloadWorkbook() {
     await exportWorkbook(filteredRecords)
     setNotice('File Excel berhasil disiapkan.')
+  }
+
+  async function synchronizeDashboardSource() {
+    if (dashboardSyncing || savePending || importSaving || !canEdit) return
+    const confirmed = window.confirm(
+      'Ambil data terbaru dari sheet DATA AI dan ganti data Dashboard AI di RABData? '
+      + 'Kolom yang tersedia di DATA AI akan diperbarui; RECORD ID dan kolom aplikasi yang tidak tersedia di sumber dipertahankan untuk baris yang cocok.',
+    )
+    if (!confirmed) return
+
+    setDashboardSyncing(true)
+    setNotice('Mengambil DATA AI dan menyimpan ke RABData...')
+    try {
+      const response = await apiPost({ action: 'syncDashboardSource' })
+      const result = await response.json()
+      if (!response.ok || !result.ok) throw new Error(result.error || 'Sinkronisasi Dashboard AI gagal.')
+      const nextRecords = result.records || []
+      setRecords(nextRecords)
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextRecords))
+      setPublicUpdatedAt(result.updatedAt || new Date().toISOString())
+      setConnection('cloud')
+      setNotice(`${result.rows ?? nextRecords.length} baris DATA AI berhasil disinkronkan ke RABData.`)
+    } catch (error) {
+      setNotice(`Sinkronisasi Dashboard AI gagal: ${error.message || 'Kesalahan koneksi.'}`)
+    } finally {
+      setDashboardSyncing(false)
+    }
   }
 
   const pageTitle = {
@@ -897,7 +1015,9 @@ function App() {
             <div className={`sync-status ${!isMonitoringView && connection === 'cloud' ? 'is-cloud' : ''}`} title={isMonitoringView ? 'Workbook Monitoring tersimpan di browser ini' : connection === 'cloud' ? 'Google Sheets tersambung' : 'Penyimpanan browser'}>{isMonitoringView ? <FileSpreadsheet size={15} /> : connection === 'cloud' ? <Cloud size={15} /> : <CircleAlert size={15} />}<span>{isMonitoringView ? 'Data lokal' : connection === 'cloud' ? 'Google Sheets' : 'Lokal'}</span></div>
             {auth ? <>
               <button className="button button-secondary export-button" onClick={downloadWorkbook}><ArrowDownToLine size={16} /><span>Ekspor</span></button>
-              {canEdit && <button className="button button-primary" onClick={() => { setImportModal(true); setImportError(''); setPendingImport(null) }}><Plus size={17} /><span>Impor Excel</span></button>}
+              {canEdit && activeView === 'overview' && <button className="button button-secondary" disabled={dashboardSyncing || savePending || importSaving} onClick={synchronizeDashboardSource}>{dashboardSyncing ? <LoaderCircle className="toast-progress" size={16} /> : <RefreshCw size={16} />}<span>{dashboardSyncing ? 'Sinkron...' : 'Sinkron DATA AI'}</span></button>}
+              {canEdit && <button className="button button-secondary" disabled={dashboardSyncing || savePending || importSaving} onClick={() => { setMasterImportModal(true); setMasterImportError(''); setPendingMasterImport(null) }}><Boxes size={16} /><span>Impor Master</span></button>}
+              {canEdit && <button className="button button-primary" disabled={dashboardSyncing || importSaving} onClick={() => { setImportModal(true); setImportError(''); setPendingImport(null) }}><Plus size={17} /><span>Impor Excel</span></button>}
               <button className="icon-button" aria-label="Keluar" title="Keluar" onClick={logout}><LogOut size={17} /></button>
             </> : <button className="button button-primary" onClick={() => {
               if (authStatus?.setupRequired) {
@@ -934,7 +1054,7 @@ function App() {
             <section className="page-heading data-heading"><div><p className="eyebrow">PORTOFOLIO ANGGARAN</p><h1>Data anggaran</h1><p className="heading-subtitle">Kelola rekap RAB dan lengkapi nilai kontrak secara manual.</p></div>{canEdit && <button className="button button-primary" onClick={() => { setImportModal(true); setImportError(''); setPendingImport(null) }}><Upload size={16} /><span>Impor data</span></button>}</section>
             <ProjectTable records={filteredRecords} onEdit={canEdit ? setEditingRecord : undefined} onViewAll={() => setActiveView('data')} searchTerm={searchTerm} setSearchTerm={setSearchTerm} selectedYear={selectedYear} setSelectedYear={setSelectedYear} years={years} selectedProgram={selectedProgram} setSelectedProgram={setSelectedProgram} programs={programs} selectedNotesCategory={selectedNotesCategory} setSelectedNotesCategory={setSelectedNotesCategory} readOnly={!canEdit} />
             <div className="table-footnote"><ShieldCheck size={14} /> Aplikasi ini untuk rekap dan monitoring. Proses tender dan kontrak dilakukan di luar aplikasi.</div>
-          </> : activeView.startsWith('monitoring-') && auth ? <Monitoring key={activeView} moduleId={activeView.slice('monitoring-'.length)} onNotice={setNotice} onLoadMonitoring={loadMonitoringFromSheets} onSaveMonitoring={saveMonitoringToSheets} readOnly={!canEdit} /> : activeView === 'contracts' && auth ? <>
+          </> : activeView.startsWith('monitoring-') && auth ? <Monitoring key={activeView} moduleId={activeView.slice('monitoring-'.length)} onNotice={setNotice} onLoadMonitoring={loadMonitoringFromSheets} onLoadMonitoringSource={loadMonitoringSourceFromSheets} onSaveMonitoring={saveMonitoringToSheets} readOnly={!canEdit} /> : activeView === 'contracts' && auth ? <> 
             <section className="page-heading data-heading"><div><p className="eyebrow">ADMINISTRASI PENGADAAN</p><h1>Data Kontrak</h1><p className="heading-subtitle">Catat nomor kontrak, vendor pemenang, dan nilai kontrak aktual per PRK/RAB.</p></div></section>
             <div className="table-footnote contract-guidance"><ShieldCheck size={14} /> Nilai PA adalah alokasi/pagu. Nilai kontrak diisi sesuai kontrak pemenang dan tidak otomatis mengikuti saldo PA.</div>
             <ContractTable records={contractRecords} workflowCollections={workflowCollections} onEdit={canEdit ? setEditingRecord : undefined} readOnly={!canEdit} />
@@ -967,10 +1087,18 @@ function App() {
         <div className="modal-actions"><button className="button button-secondary" disabled={savePending || importSaving} onClick={() => setImportModal(false)}>Batal</button><button className="button button-primary" disabled={savePending || importSaving || !pendingImport?.records.length} onClick={confirmImport}>{savePending || importSaving ? <LoaderCircle className="toast-progress" size={16} /> : <ArrowUpFromLine size={16} />}<span>{savePending || importSaving ? 'Menyimpan...' : `Impor ${pendingImport ? `${pendingImport.records.length} data` : 'data'}`}</span></button></div>
       </section></div>}
 
+      {masterImportModal && canEdit && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !importSaving) setMasterImportModal(false) }}><section className="modal import-modal" role="dialog" aria-modal="true" aria-labelledby="master-import-title">
+        <div className="modal-heading"><div><p className="eyebrow">IMPOR MASTER</p><h2 id="master-import-title">Impor material dan kegiatan</h2><p>Gunakan workbook Excel dengan sheet FORM MATERIAL &amp; HARGA dan/atau DATABASE KEGIATAN. Sheet data RAB tidak diperlukan.</p></div><button className="icon-button" aria-label="Tutup" disabled={importSaving} onClick={() => setMasterImportModal(false)}><X size={19} /></button></div>
+        <button className={`upload-zone ${pendingMasterImport ? 'has-file' : ''}`} onClick={() => masterFileInput.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); receiveMasterFile(event.dataTransfer.files[0]) }}><input ref={masterFileInput} type="file" accept=".xlsx" hidden onChange={(event) => { receiveMasterFile(event.target.files[0]); event.target.value = '' }} /><div className="upload-icon">{pendingMasterImport ? <Check size={20} /> : <Upload size={20} />}</div><strong>{pendingMasterImport ? pendingMasterImport.fileName : 'Klik untuk memilih file'}</strong><span>atau tarik workbook Excel ke area ini (.xlsx)</span></button>
+        {masterImportError && <div className="inline-error"><CircleAlert size={16} />{masterImportError}</div>}
+        {pendingMasterImport && <div className="import-preview"><div><span>Master material</span><strong>{pendingMasterImport.materials.length} item</strong></div><div><span>Master kegiatan</span><strong>{pendingMasterImport.activityCatalog.length} kegiatan</strong></div><p>Data manual dipertahankan. Import ini hanya menyimpan master ke tab masing-masing; tidak mengubah RABData atau memicu perhitungan ulang RAB.</p></div>}
+        <div className="modal-actions"><button className="button button-secondary" disabled={importSaving} onClick={() => setMasterImportModal(false)}>Batal</button><button className="button button-primary" disabled={importSaving || !pendingMasterImport || (!pendingMasterImport.materials.length && !pendingMasterImport.activityCatalog.length)} onClick={confirmMasterImport}>{importSaving ? <LoaderCircle className="toast-progress" size={16} /> : <ArrowUpFromLine size={16} />}<span>{importSaving ? 'Menyimpan...' : 'Impor master saja'}</span></button></div>
+      </section></div>}
+
       {editingRecord && canEdit && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditingRecord(null) }}><section className="modal contract-modal" role="dialog" aria-modal="true" aria-labelledby="contract-title"><div className="modal-heading"><div><p className="eyebrow">INPUT DATA ANGGARAN</p><h2 id="contract-title">Edit data anggaran</h2><p className="modal-project-name">{editingRecord.description}</p></div><button className="icon-button" aria-label="Tutup" onClick={() => setEditingRecord(null)}><X size={19} /></button></div>
         <form onSubmit={saveRecord}><div className="record-edit-grid"><label className="field-label">Nomor kontrak<input name="contractNumber" defaultValue={editingRecord.contractNumber} placeholder="Masukkan nomor kontrak" /></label><label className="field-label">Vendor pemenang<input name="vendor" defaultValue={editingRecord.vendor} placeholder="Masukkan nama vendor pemenang" /></label><label className="field-label">Nilai kontrak aktual (Rp)<input name="contractValue" type="number" min="0" step="1" defaultValue={editingRecord.contractValue || ''} placeholder="0" /></label><label className="field-label">Tanggal awal<input name="startDate" type="date" defaultValue={formatDateInput(editingRecord.startDate)} /></label><label className="field-label">Tanggal akhir<input name="endDate" type="date" defaultValue={formatDateInput(editingRecord.endDate)} /></label><label className="field-label">Rencana kontrak<input name="plannedContract" type="date" defaultValue={formatDateInput(editingRecord.plannedContract)} /></label><label className="field-label">Rencana tagih<input name="plannedBilling" type="date" defaultValue={formatDateInput(editingRecord.plannedBilling)} /></label><label className="field-label">Nilai tagihan (Rp)<input name="billingAmount" type="number" min="0" step="1" defaultValue={plannedBillingAmount(editingRecord)} placeholder="0" /></label><label className="field-label">Progress<input name="progress" defaultValue={editingRecord.progress || ''} placeholder="Contoh: LUNAS" /></label><label className="field-label">Tambahan proyeksi tagih bulan ini (Rp)<input name="projectedBilling" type="number" min="0" step="1" defaultValue="" placeholder="0" /></label><label className="field-label">Tanggal bayar<input name="paymentDate" type="date" defaultValue={formatDateInput(editingRecord.paymentDate)} /></label></div><p className="form-note"><CircleAlert size={15} /> Nilai tagihan masuk ke kolom bulanan sesuai tanggal rencana tagih. Proyeksi bulan ini akan ditambahkan ke akumulasi proyeksi sebelumnya; kosongkan jika tidak ada tambahan.</p><div className="modal-actions"><button type="button" className="button button-secondary" disabled={savePending} onClick={() => setEditingRecord(null)}>Batal</button><button type="submit" className="button button-primary" disabled={savePending}>{savePending ? <><LoaderCircle className="toast-progress" size={16} />Menyimpan...</> : <><Check size={16} />Simpan data</>}</button></div></form>
       </section></div>}
-      {notice && <div className="toast" role="status" aria-live="polite">{logoutPending || savePending || importSaving ? <LoaderCircle className="toast-progress" size={16} /> : notice.toLowerCase().includes('gagal') ? <CircleAlert size={16} /> : <Check size={16} />}{notice}</div>}
+      {notice && <div className="toast" role="status" aria-live="polite">{logoutPending || savePending || importSaving || dashboardSyncing ? <LoaderCircle className="toast-progress" size={16} /> : notice.toLowerCase().includes('gagal') ? <CircleAlert size={16} /> : <Check size={16} />}{notice}</div>}
     </div>
   )
 }

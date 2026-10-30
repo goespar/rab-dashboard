@@ -150,6 +150,28 @@ export async function importWorkbook(file) {
     .filter((record) => record.prk || record.rabNumber || record.paNumber || record.description)
   if (!records.length) throw new Error('Sheet ditemukan, tetapi tidak ada baris data anggaran untuk diimpor.')
 
+  const masters = parseWorkflowMasters(sheets)
+  return { records, ...masters, sheetName: chosen.name }
+}
+
+export async function importWorkflowMasters(file) {
+  const workbook = new ExcelJS.Workbook()
+  await workbook.xlsx.load(await file.arrayBuffer())
+  const sheets = workbook.worksheets.map((worksheet) => {
+    const rows = []
+    worksheet.eachRow({ includeEmpty: true }, (row) => {
+      rows[row.number - 1] = Array.from({ length: worksheet.columnCount }, (_, index) => workbookCellValue(row.getCell(index + 1).value))
+    })
+    return { name: worksheet.name, rows }
+  })
+  const masters = parseWorkflowMasters(sheets)
+  if (!masters.materials.length && !masters.activityCatalog.length) {
+    throw new Error('Sheet FORM MATERIAL & HARGA atau DATABASE KEGIATAN tidak ditemukan atau tidak berisi data yang valid.')
+  }
+  return masters
+}
+
+function parseWorkflowMasters(sheets) {
   const materialSheet = sheets.find((sheet) => sheet.name.trim().toUpperCase() === 'FORM MATERIAL & HARGA')
   const materialHeaderIndex = materialSheet ? materialSheet.rows.slice(0, 10).findIndex((row) => {
     const headers = row.map(normalizedHeader)
@@ -202,7 +224,7 @@ export async function importWorkbook(file) {
     })
     .filter((row) => row.name)
 
-  return { records, materials, activityCatalog, sheetName: chosen.name }
+  return { materials, activityCatalog }
 }
 
 export async function exportWorkbook(records) {
