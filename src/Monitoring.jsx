@@ -855,14 +855,14 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoa
   }
 
   return <section className="monitoring-page">
-    <header className="monitoring-heading">
+    <header className={`monitoring-heading${isVendorModule ? ' monitoring-heading-vendor' : ''}`}>
       <div className="monitoring-heading-icon"><Icon size={19} /></div>
       <div className="monitoring-heading-copy">
         <p className="eyebrow">{info.eyebrow}</p>
         <h1>{module.label}</h1>
         <p>{info.description}{cloudLoading ? ' · Memuat data Google Sheets...' : ''}</p>
       </div>
-      <div className="monitoring-heading-actions">
+      <div className={`monitoring-heading-actions${isVendorModule ? ' monitoring-heading-actions-vendor' : ''}`}>
         {dataset && <span className="monitoring-import-status"><span /> {dataset.rows.length.toLocaleString('id-ID')} baris · {dataset.sheetName}</span>}
         {cloudSaving && <span className="monitoring-import-status"><span className="monitoring-cloud-saving-dot" /> Menyimpan ke Google Sheets...</span>}
         {needsCloudMigration && !readOnly && <button className="button button-primary" type="button" onClick={migrateLocalData} disabled={cloudSaving || cloudLoading}><Database size={15} /><span>Simpan data browser ke Google Sheets</span></button>}
