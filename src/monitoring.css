@@ -23,6 +23,7 @@
 .monitoring-empty-state h2 { margin: 3px 0 0; color: #26364d; font-size: 16px; }
 .monitoring-empty-state p { max-width: 490px; margin: 0 0 7px; color: #78869a; font-size: 10px; line-height: 1.6; }
 .monitoring-kpi-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.monitoring-kpi-grid-tibet { grid-template-columns: repeat(7, minmax(0, 1fr)); }
 .monitoring-kpi-card { position: relative; display: grid; min-width: 0; gap: 8px; overflow: hidden; padding: 13px 15px; }
 .monitoring-kpi-card::before { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; background: #0782bd; content: ''; }
 .monitoring-kpi-2::before { background: #23b8ca; }

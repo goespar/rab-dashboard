@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import ExcelJS from 'exceljs'
-import { importMonitoringWorkbook } from '../src/lib/monitoringWorkbook.js'
+import { getTibetDisplayRows, importMonitoringWorkbook } from '../src/lib/monitoringWorkbook.js'
 
 async function makeWorkbookFile() {
   const workbook = new ExcelJS.Workbook()
@@ -60,9 +60,28 @@ test('imports all Monitoring sheets and preserves workbook cross references', as
   assert.equal(data.vendor.rows[0][28], 'OPEN')
   assert.equal(data.vendor.rows[1][0], '')
   assert.equal(data.vendor.rows[1][28], 'OPEN')
-  assert.equal(data.tibet.rows[1][1], 'KR-1')
-  assert.equal(data.tibet.rows[1][0], 'Vendor A')
+  assert.equal(data.tibet.rows[1][0], '')
+  assert.equal(data.tibet.rows[1][1], '')
+  assert.equal(data.tibet.rows[1][3], 'PK-2')
   assert.equal(data.customers.rows[0][1], 'Pelanggan A')
+})
+
+test('displays repeated saved Tibet group labels only on the first row', () => {
+  const headers = ['VENDOR', 'NOMOR KR', 'JENIS TIBET', 'NO PK', 'POS', 'VOL KR']
+  const rows = [
+    ['Vendor A', 'KR-1', '13', '', '62', 100],
+    ['Vendor A', 'KR-1', '13', 'PK-1', '62', ''],
+    ['Vendor B', 'KR-2', '9', '', '61', 200],
+    ['', '', '', 'PK-2', '61', ''],
+  ]
+
+  const displayRows = getTibetDisplayRows(headers, rows)
+
+  assert.deepEqual(displayRows[0], rows[0])
+  assert.deepEqual(displayRows[1].slice(0, 3), ['', '', ''])
+  assert.deepEqual(displayRows[2], rows[2])
+  assert.deepEqual(displayRows[3], rows[3])
+  assert.deepEqual(rows[1].slice(0, 3), ['Vendor A', 'KR-1', '13'])
 })
 
 test('reports which Monitoring sheet is missing', async () => {

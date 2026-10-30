@@ -14,6 +14,25 @@ export function normalizeMonitoringHeader(value) {
   return String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '')
 }
 
+export function getTibetDisplayRows(headers, rows) {
+  const indexes = ['VENDOR', 'NOMOR KR', 'JENIS TIBET'].map((name) =>
+    headers.findIndex((header) => normalizeMonitoringHeader(header) === normalizeMonitoringHeader(name))
+  )
+  let previousGroup = null
+
+  return rows.map((row) => {
+    const currentGroup = indexes.map((index) => String(row[index] ?? '').trim())
+    const repeatedGroup = previousGroup
+      && currentGroup[0]
+      && currentGroup[1]
+      && currentGroup.every((value, index) => value === previousGroup[index])
+    const displayRow = repeatedGroup ? row.map((value, index) => indexes.includes(index) ? '' : value) : row
+
+    if (currentGroup[0] && currentGroup[1]) previousGroup = currentGroup
+    return displayRow
+  })
+}
+
 function getCellValue(value) {
   if (value === null || value === undefined) return ''
   if (value instanceof Date) {
@@ -182,24 +201,6 @@ function linkStockToSpb(stock, spb) {
   })
 }
 
-function enrichTibetRows(dataset) {
-  if (!dataset) return
-  const headers = dataset.headers.map(normalizeMonitoringHeader)
-  const vendorIndex = headers.indexOf('VENDOR')
-  const krIndex = headers.indexOf('NOMORKR')
-  const typeIndex = headers.indexOf('JENISTIBET')
-  let current = ['', '', '']
-  dataset.rows.forEach((row) => {
-    if (String(row[krIndex] ?? '').trim()) {
-      current = [row[vendorIndex] ?? '', row[krIndex] ?? '', row[typeIndex] ?? '']
-    } else if (String(current[1]).trim()) {
-      if (!String(row[vendorIndex] ?? '').trim()) row[vendorIndex] = current[0]
-      if (!String(row[krIndex] ?? '').trim()) row[krIndex] = current[1]
-      if (!String(row[typeIndex] ?? '').trim()) row[typeIndex] = current[2]
-    }
-  })
-}
-
 export async function importMonitoringWorkbook(file, onProgress) {
   onProgress?.('Membuka workbook Excel…')
   const workbook = new ExcelJS.Workbook()
@@ -230,7 +231,6 @@ export async function importMonitoringWorkbook(file, onProgress) {
     onProgress?.('Menyiapkan status dan referensi kontrak…')
     enrichVendorRows(vendor, materialSheet)
   }
-  enrichTibetRows(datasets.tibet)
   linkStockToSpb(datasets.stock, datasets.spb)
   onProgress?.('Workbook siap disimpan.')
   return datasets

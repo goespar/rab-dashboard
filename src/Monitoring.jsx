@@ -7,7 +7,7 @@ import {
 import {
   Bar, BarChart, CartesianGrid, Cell, ComposedChart, Legend, Line, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
-import { importMonitoringWorkbook, MONITORING_MODULES, normalizeMonitoringHeader } from './lib/monitoringWorkbook.js'
+import { getTibetDisplayRows, importMonitoringWorkbook, MONITORING_MODULES, normalizeMonitoringHeader } from './lib/monitoringWorkbook.js'
 import { readRabMaterialFile, summarizeRabMaterials } from './lib/rabDatabase.js'
 import './monitoring.css'
 
@@ -55,7 +55,7 @@ const KPI_FIELDS = {
   stock: [['NORMALISASI', 'Material terdaftar'], ['VOL 61', 'Stok POS 61'], ['VOL 62', 'Stok POS 62'], ['VOL GUDANG', 'Stok gudang']],
   load: [['PENYULANG', 'Penyulang'], ['BEBAN SIANG', 'Beban siang'], ['BEBAN MALAM', 'Beban malam'], ['% PEMBEBANAN PENYULANG', 'Rata-rata beban']],
   rabDatabase: [['ID RAB', 'ID RAB'], ['PRK', 'PRK'], ['URAIAN MATERIAL', 'Baris material'], ['VOLUME', 'Total volume']],
-  tibet: [['NOMOR KR', 'Jumlah KR'], ['NO PK', 'Jumlah PK'], ['SISA KR', 'Sisa KR'], ['SISA PK', 'Sisa PK'], ['VOL PASANG', 'Terpasang']],
+  tibet: [['NOMOR KR', 'Jumlah KR'], ['NO PK', 'Jumlah PK'], ['VOL KR', 'Jumlah VOL KR'], ['VOL PK', 'Jumlah VOL PK'], ['VOL PASANG', 'Terpasang'], ['SISA KR', 'Sisa KR'], ['SISA PK', 'Sisa PK']],
   vendor: [['NOMOR KONTRAK', 'Kontrak vendor'], ['VENDOR', 'Nama Vendor'], ['NILAI KONTRAK', 'Nilai kontrak'], ['REALISASI (Rp)', 'Total realisasi'], ['SISA KONTRAK', 'Sisa kontrak']],
   customers: [['NAMA', 'Pelanggan terdata'], ['PK', 'PK sudah'], ['ULP', 'ULP'], ['DAYA', 'Total daya'], ['PROGRESS', 'Sudah nyala']],
 }
@@ -106,6 +106,11 @@ function sumColumn(rows, index) {
   return rows.reduce((total, row) => total + numberValue(cell(row, index)), 0)
 }
 
+function getTibetSummaryRows(headers, rows) {
+  const pkIndex = getColumnIndex(headers, 'NO PK')
+  return rows.filter((row) => !String(cell(row, pkIndex)).trim())
+}
+
 function averageColumn(rows, index) {
   return rows.length ? sumColumn(rows, index) / rows.length : 0
 }
@@ -150,10 +155,8 @@ function buildMetrics(moduleId, dataset, rows, selectedFilters = {}) {
           : sumColumn(rows, index)
     } else if (moduleId === 'tibet') {
       if (field === 'NOMOR KR' || field === 'NO PK') value = uniqueCount(rows, index)
-      else if (field === 'VOL PASANG') {
-        const pkIndex = getColumnIndex(headers, 'NO PK')
-        value = sumColumn(rows.filter((row) => !String(cell(row, pkIndex)).trim()), index)
-      } else value = sumColumn(rows, index)
+      else if (['VOL KR', 'VOL PK', 'VOL PASANG'].includes(field)) value = sumColumn(getTibetSummaryRows(headers, rows), index)
+      else value = sumColumn(rows, index)
     } else if (moduleId === 'vendor') {
       if (field === 'NOMOR KONTRAK') value = uniqueCount(rows, index)
       else if (field === 'VENDOR') {
@@ -269,10 +272,28 @@ function buildChartData(moduleId, dataset, rows, selectedFilters = {}) {
     bars: [['VOLUME', 'Total volume', '#0782bd']],
     label: '8 material dengan volume terbesar',
   }
-  if (moduleId === 'tibet') return {
-    data: groupBy('VENDOR', ['VOL KR', 'VOL PK', 'VOL PASANG'], 8),
-    bars: [['VOL KR', 'Volume KR', '#0782bd'], ['VOL PK', 'Volume PK', '#24bfd3'], ['VOL PASANG', 'Terpasang', '#79b86a']],
-    label: 'Volume kontrak dan pemasangan per vendor',
+  if (moduleId === 'tibet') {
+    const vendorIndex = getColumnIndex(headers, 'VENDOR')
+    const pkIndex = getColumnIndex(headers, 'NO PK')
+    const volumeIndexes = ['VOL KR', 'VOL PK', 'VOL PASANG'].map((field) => [field, getColumnIndex(headers, field)])
+    const groups = new Map()
+    let activeVendor = ''
+    rows.forEach((row) => {
+      const vendor = String(cell(row, vendorIndex)).trim()
+      if (vendor) activeVendor = vendor
+      if (String(cell(row, pkIndex)).trim()) return
+      const name = vendor || activeVendor || 'Tidak diketahui'
+      const item = groups.get(name) || { name, 'VOL KR': 0, 'VOL PK': 0, 'VOL PASANG': 0 }
+      volumeIndexes.forEach(([field, index]) => {
+        item[field] += numberValue(cell(row, index))
+      })
+      groups.set(name, item)
+    })
+    return {
+      data: [...groups.values()].sort((left, right) => right['VOL KR'] - left['VOL KR']).slice(0, 8),
+      bars: [['VOL KR', 'Volume KR', '#0782bd'], ['VOL PK', 'Volume PK', '#24bfd3'], ['VOL PASANG', 'Terpasang', '#79b86a']],
+      label: 'Volume kontrak dan pemasangan per vendor',
+    }
   }
   if (moduleId === 'vendor') {
     const materialIndex = getColumnIndex(headers, 'NAMA MATERIAL')
@@ -461,15 +482,28 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onSav
     const remaining = headers.map((_, index) => index).filter((index) => !selected.includes(index))
     return [...selected, ...remaining]
   }, [headers, module.id])
+  const tibetDisplayRows = useMemo(() => {
+    if (module.id !== 'tibet' || !dataset) return new Map()
+    const displayRows = getTibetDisplayRows(headers, dataset.rows)
+    return new Map(dataset.rows.map((row, index) => [row, displayRows[index]]))
+  }, [dataset, headers, module.id])
   const filterFields = FILTER_FIELDS[module.id] || EMPTY_FILTER_FIELDS
   const [selectedFilters, setSelectedFilters] = useState({})
   const filteredRows = useMemo(() => {
     if (!dataset) return []
     const term = search.trim().toLocaleLowerCase('id')
     let activeContract = ''
+    let activeTibetVendor = ''
+    let activeTibetKr = ''
     return dataset.rows.filter((row) => {
       const rowContract = String(cell(row, getColumnIndex(headers, 'NOMOR KONTRAK'))).trim()
       if (rowContract) activeContract = rowContract
+      if (module.id === 'tibet') {
+        const rowVendor = String(cell(row, getColumnIndex(headers, 'VENDOR'))).trim()
+        const rowKr = String(cell(row, getColumnIndex(headers, 'NOMOR KR'))).trim()
+        if (rowVendor) activeTibetVendor = rowVendor
+        if (rowKr) activeTibetKr = rowKr
+      }
       for (const field of filterFields) {
         const selected = selectedFilters[field]
         if (!selected) continue
@@ -481,6 +515,10 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onSav
         } else if (field === 'KARAKTERISTIK BEBAN') {
           const index = getColumnIndex(headers, selected === 'SIANG' ? 'BEBAN SIANG' : 'BEBAN MALAM')
           if (!String(cell(row, index)).trim() || numberValue(cell(row, index)) === 0) return false
+        } else if (module.id === 'tibet' && (field === 'VENDOR' || field === 'NOMOR KR')) {
+          const index = getColumnIndex(headers, field)
+          const value = String(cell(row, index)).trim() || (field === 'VENDOR' ? activeTibetVendor : activeTibetKr)
+          if (value !== selected) return false
         } else {
           const index = getColumnIndex(headers, field)
           if (String(cell(row, index)).trim() !== selected) return false
@@ -866,7 +904,7 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onSav
       <p>Pilih workbook Excel. Sheet SPB, Stock Gudang, Beban, Database RAB, Tibet, Kontrak Vendor, dan Kebutuhan Pelanggan akan dibaca sekaligus.</p>
       <button className="button button-primary" type="button" onClick={() => fileInput.current?.click()} disabled={importing || cloudLoading || cloudSaving}><ArrowUpFromLine size={16} /> Pilih workbook</button>
     </section> : <>
-      <section className="monitoring-kpi-grid" aria-label={`Ringkasan ${module.label}`}>
+      <section className={`monitoring-kpi-grid${module.id === 'tibet' ? ' monitoring-kpi-grid-tibet' : ''}`} aria-label={`Ringkasan ${module.label}`}>
         {metrics.map((metric, index) => <article className={`panel monitoring-kpi-card monitoring-kpi-${index + 1}`} key={metric.label}>
           <div className="monitoring-kpi-label">{metric.label}</div>
           <strong className={metric.isText ? 'is-text' : ''} title={String(metric.value)}>{metric.value}</strong>
@@ -983,7 +1021,11 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onSav
             <thead><tr><th className="monitoring-row-number">No.</th>{columns.map((index) => <th key={`${index}-${headers[index]}`}>{headers[index]}</th>)}</tr></thead>
             <tbody>{visibleRows.length ? visibleRows.map((row, rowIndex) => <tr key={`${currentPage}-${rowIndex}`}>
               <td className="monitoring-row-number">{((currentPage - 1) * PAGE_SIZE + rowIndex + 1).toLocaleString('id-ID')}</td>
-              {columns.map((columnIndex) => <td key={columnIndex} title={String(cell(row, columnIndex))}>{formatCell(cell(row, columnIndex), headers[columnIndex])}</td>)}
+              {columns.map((columnIndex) => {
+                const displayRow = tibetDisplayRows.get(row) || row
+                const value = cell(displayRow, columnIndex)
+                return <td key={columnIndex} title={String(value)}>{module.id === 'tibet' && (value === '' || value === null || value === undefined) ? '' : formatCell(value, headers[columnIndex])}</td>
+              })}
             </tr>) : <tr><td className="monitoring-no-data" colSpan={columns.length + 1}><Search size={18} />Tidak ada data yang cocok dengan filter.</td></tr>}</tbody>
           </table>
         </div>

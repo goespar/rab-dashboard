@@ -1697,6 +1697,7 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
                   </tr>
                   {materialExpanded && <tr><td colSpan="5"><div className="workflow-component-details">
                     <table className="workflow-rab-detail-table">
+                      <colgroup><col /><col /><col /><col /><col /><col /><col /><col /><col /><col /></colgroup>
                       <thead><tr><th>No</th><th>Uraian Material</th><th>Volume</th><th>Satuan</th><th>Harga satuan material</th><th>Harga satuan jasa</th><th>Bagian material</th><th>Bagian jasa</th><th>Jumlah (Rp)</th><th className="workflow-actions-heading">Aksi</th></tr></thead>
                       <tbody>{component.records.map((row, rowIndex) => {
                         const lineMaterial = number(row.materialPart ?? number(row.quantityPerUnit) * number(row.materialPrice))
@@ -1709,10 +1710,12 @@ export default function RabWorkflow({ view, collections, programRecords = [], on
                 </Fragment>
               })}</tbody>
               <tfoot>
-                <tr><td colSpan="3">Subtotal</td><td className="workflow-total">{formatCurrency(totalPart)}</td><td /></tr>
-                <tr><td colSpan="3">DPP (11/12)</td><td>{formatCurrency(totalPart * 11 / 12)}</td><td /></tr>
-                <tr><td colSpan="3">PPN 12%</td><td>{formatCurrency(calculateRabBudgetTotal(totalPart) - totalPart)}</td><td /></tr>
-                <tr><td colSpan="3"><strong>TOTAL ANGGARAN — kolom M</strong></td><td className="workflow-total">{formatCurrency(calculateRabBudgetTotal(totalPart))}</td><td /></tr>
+                <tr><td colSpan="5"><table className="workflow-rab-tax-alignment"><colgroup><col /><col /><col /><col /><col /><col /><col /><col /><col /><col /></colgroup><tbody>
+                  <tr><td colSpan="8">Subtotal</td><td className="workflow-total workflow-rab-tax-amount">{formatCurrency(totalPart)}</td><td /></tr>
+                  <tr><td colSpan="8">DPP (11/12)</td><td className="workflow-rab-tax-amount">{formatCurrency(totalPart * 11 / 12)}</td><td /></tr>
+                  <tr><td colSpan="8">PPN 12%</td><td className="workflow-rab-tax-amount">{formatCurrency(calculateRabBudgetTotal(totalPart) - totalPart)}</td><td /></tr>
+                  <tr><td colSpan="8"><strong>TOTAL ANGGARAN — kolom M</strong></td><td className="workflow-total workflow-rab-tax-amount">{formatCurrency(calculateRabBudgetTotal(totalPart))}</td><td /></tr>
+                </tbody></table></td></tr>
               </tfoot>
             </table>
           </div></td></tr>] : []),
