@@ -6,7 +6,7 @@ import test from 'node:test'
 import vm from 'node:vm'
 import ExcelJS from 'exceljs'
 import appsScriptHandler from '../api/apps-script.js'
-import { HEADERS, importWorkbook, MONTHLY_BILLING_COLUMNS, parseNumber } from '../src/lib/workbook.js'
+import { HEADERS, importWorkbook, importWorkflowMasters, MONTHLY_BILLING_COLUMNS, parseNumber } from '../src/lib/workbook.js'
 import { applyFinalizedPaBalances, summarizePublicDashboard } from '../src/lib/publicDashboard.js'
 import { findProgramRecordForRabGroup } from '../src/lib/rabReferences.js'
 import { calculateRabTotalsByProgramRecord } from '../src/lib/rabTotals.js'
@@ -937,6 +937,26 @@ test('imports material prices by header and normalizes Excel thousand-scaled cur
   })
   assert.equal(parseNumber('1.344.478'), 1344478)
   assert.equal(parseNumber('1,25'), 1.25)
+})
+
+test('imports material and activity masters from a workbook without touching RAB data', async () => {
+  const workbook = new ExcelJS.Workbook()
+  const materialSheet = workbook.addWorksheet('FORM MATERIAL & HARGA')
+  materialSheet.addRow(['HARGA JASA', 'KRITERIA', 'URAIAN', 'MDU/NON MDU', 'SAT', 'HARGA MATERIAL', 'KOMPONEN PEKERJAAN', 'KETERANGAN'])
+  materialSheet.addRow([254.649, 'TM', 'Material A', 'NON MDU', 'set', '1,344,478', 'Pemasangan SUTM', 'Pasang'])
+  const activitySheet = workbook.addWorksheet('DATABASE KEGIATAN')
+  activitySheet.addRow(['PRK', 'SATUAN', 'KOMPONEN PEKERJAAN', 'KEGIATAN'])
+  activitySheet.addRow(['PRK-1', 'unit', 'Pekerjaan sambungan baru', 'Penyambungan pelanggan'])
+  const buffer = await workbook.xlsx.writeBuffer()
+  const result = await importWorkflowMasters({
+    arrayBuffer: async () => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+  })
+
+  assert.equal(result.materials.length, 1)
+  assert.equal(result.materials[0].name, 'Material A')
+  assert.equal(result.activityCatalog.length, 1)
+  assert.equal(result.activityCatalog[0].prk, 'PRK-1')
+  assert.equal(Object.hasOwn(result, 'records'), false)
 })
 
 test('bootstraps admin, exposes only aggregate public data, and blocks viewer writes', async () => {
