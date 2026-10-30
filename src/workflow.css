@@ -117,13 +117,42 @@
 .workflow-realizations-table .workflow-contract-number { height: auto; overflow: visible; overflow-wrap: anywhere; line-height: 1.4; vertical-align: top; white-space: normal; }
 .workflow-materials-freeze-scroll, .workflow-catalog-freeze-scroll { max-height: 420px; overscroll-behavior: contain; }
 .workflow-materials-freeze-scroll table, .workflow-catalog-freeze-scroll table { table-layout: fixed; border-collapse: separate; border-spacing: 0; }
-.workflow-materials-freeze-scroll table { min-width: 1080px; }
+.workflow-materials-freeze-scroll table { width: max-content; min-width: 1450px; table-layout: auto; }
 .workflow-catalog-freeze-scroll table { min-width: 1100px; }
 .workflow-materials-freeze-scroll th, .workflow-catalog-freeze-scroll th { position: sticky; z-index: 3; top: 0; background: #f4f7fb; }
 .workflow-actions-heading, .workflow-actions-cell { width: 80px; min-width: 80px; max-width: 80px; }
-.workflow-materials-freeze-scroll th:nth-child(2), .workflow-materials-freeze-scroll td:nth-child(2) { position: sticky; left: 0; width: 280px; min-width: 280px; max-width: 280px; }
-.workflow-materials-freeze-scroll th:nth-child(2) { z-index: 5; }
-.workflow-materials-freeze-scroll td:nth-child(2) { z-index: 2; background: #fff; white-space: normal; }
+.workflow-materials-freeze-scroll th:first-child, .workflow-materials-freeze-scroll td:first-child { position: sticky; left: 0; width: 105px; min-width: 105px; max-width: 105px; }
+.workflow-materials-freeze-scroll th:first-child { z-index: 5; }
+.workflow-materials-freeze-scroll td:first-child { z-index: 2; background: #fff; }
+.workflow-materials-freeze-scroll th:nth-child(2), .workflow-materials-freeze-scroll td:nth-child(2) { width: 150px; min-width: 150px; }
+.workflow-materials-freeze-scroll th:nth-child(3), .workflow-materials-freeze-scroll td:nth-child(3) { width: 230px; min-width: 230px; }
+.workflow-materials-freeze-scroll th:nth-child(4), .workflow-materials-freeze-scroll td:nth-child(4) { width: 245px; min-width: 245px; }
+.workflow-materials-freeze-scroll th:nth-child(5), .workflow-materials-freeze-scroll td:nth-child(5) { width: 270px; min-width: 270px; }
+.workflow-materials-freeze-scroll th:nth-child(6), .workflow-materials-freeze-scroll td:nth-child(6) { width: 85px; min-width: 85px; }
+.workflow-materials-freeze-scroll th:nth-child(7), .workflow-materials-freeze-scroll td:nth-child(7) { width: 75px; min-width: 75px; }
+.workflow-materials-freeze-scroll th:nth-child(8), .workflow-materials-freeze-scroll td:nth-child(8) { width: 105px; min-width: 105px; }
+.workflow-materials-freeze-scroll th:nth-child(9), .workflow-materials-freeze-scroll td:nth-child(9),
+.workflow-materials-freeze-scroll th:nth-child(10), .workflow-materials-freeze-scroll td:nth-child(10) { width: 145px; min-width: 145px; }
+.workflow-materials-freeze-scroll th:not(:last-child) {
+  height: auto;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+  vertical-align: top;
+  white-space: normal;
+}
+.workflow-materials-freeze-scroll td:not(.workflow-component-description):not(.workflow-actions-cell):not(.workflow-activity-name):not(.workflow-prk-name):not(.workflow-contract-number) {
+  height: auto;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+  text-overflow: clip;
+  vertical-align: top;
+  white-space: normal;
+}
+.workflow-materials-freeze-scroll td:not(.workflow-component-description):not(.workflow-actions-cell):not(.workflow-activity-name):not(.workflow-prk-name):not(.workflow-contract-number):nth-child(9),
+.workflow-materials-freeze-scroll td:not(.workflow-component-description):not(.workflow-actions-cell):not(.workflow-activity-name):not(.workflow-prk-name):not(.workflow-contract-number):nth-child(10) {
+  white-space: nowrap;
+}
 .workflow-catalog-freeze-scroll th:first-child, .workflow-catalog-freeze-scroll td:first-child { position: sticky; left: 0; width: 300px; min-width: 300px; max-width: 300px; }
 .workflow-catalog-freeze-scroll th:nth-child(2), .workflow-catalog-freeze-scroll td:nth-child(2) { width: 300px; min-width: 300px; }
 .workflow-catalog-freeze-scroll th:nth-child(3), .workflow-catalog-freeze-scroll td:nth-child(3) { width: 80px; min-width: 80px; }
@@ -393,7 +422,7 @@
   .workflow-search { min-width: 0; }
   .workflow-segment button { min-width: 31px; }
   .workflow-table-scroll table { min-width: 760px; }
-  .workflow-materials-freeze-scroll table { min-width: 1080px; }
+  .workflow-materials-freeze-scroll table { min-width: 1450px; }
   .workflow-catalog-freeze-scroll table { min-width: 1100px; }
   .workflow-overview { padding: 12px 10px; }
   .workflow-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px 7px; }
