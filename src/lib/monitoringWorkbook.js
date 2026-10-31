@@ -5,7 +5,7 @@ export const MONITORING_MODULES = [
   { id: 'stock', label: 'Stock Gudang', sheetNames: ['STOCK GUDANG'], required: ['NAMA MATERIAL', 'VOL GUDANG'] },
   { id: 'load', label: 'Monitoring Beban', sheetNames: ['BEBAN GI DAN PYL'], required: ['PENYULANG', 'BEBAN SIANG'] },
   { id: 'rabDatabase', label: 'Database RAB', sheetNames: ['DATABASE_RAB', 'DATABASE RAB'], required: ['ID RAB', 'URAIAN MATERIAL'] },
-  { id: 'tibet', label: 'Mon Tibet', sheetNames: ['TIBET'], required: ['VENDOR', 'NOMOR KR'] },
+  { id: 'tibet', label: 'Monitoring Tibet', sheetNames: ['MONITORING TIBET', 'TIBET'], required: ['PROG', 'PABRIKAN', 'NO KR'] },
   { id: 'vendor', label: 'Mon Kontrak Vendor', sheetNames: ['MON KONTRAK VENDOR'], required: ['NOMOR KONTRAK', 'VENDOR'] },
   { id: 'customers', label: 'Mon Kebutuhan Pelanggan', sheetNames: ['MON KEBUTUHAN PELANGGAN', 'MON PLG PERLUASAN'], required: ['NAMA', 'NO PK'] },
 ]
@@ -15,8 +15,8 @@ export function normalizeMonitoringHeader(value) {
 }
 
 export function getTibetDisplayRows(headers, rows) {
-  const indexes = ['VENDOR', 'NOMOR KR', 'JENIS TIBET'].map((name) =>
-    headers.findIndex((header) => normalizeMonitoringHeader(header) === normalizeMonitoringHeader(name))
+  const indexes = [['PABRIKAN', 'VENDOR'], ['NO KR', 'NOMOR KR'], ['UKURAN', 'JENIS TIBET']].map((names) =>
+    headers.findIndex((header) => names.some((name) => normalizeMonitoringHeader(header) === normalizeMonitoringHeader(name)))
   )
   let previousGroup = null
 
@@ -201,15 +201,20 @@ function linkStockToSpb(stock, spb) {
   })
 }
 
-export async function importMonitoringWorkbook(file, onProgress) {
+export async function importMonitoringWorkbook(file, onProgress, { moduleId } = {}) {
   onProgress?.('Membuka workbook Excel…')
   const workbook = new ExcelJS.Workbook()
   await workbook.xlsx.load(await file.arrayBuffer())
   const worksheets = new Map(workbook.worksheets.map((worksheet) => [normalizeMonitoringHeader(worksheet.name), worksheet]))
   const datasets = {}
   const missing = []
+  const selectedModule = moduleId
+    ? MONITORING_MODULES.find((module) => module.id === moduleId)
+    : null
+  if (moduleId && !selectedModule) throw new Error('Menu Monitoring untuk impor tidak dikenal.')
+  const modules = selectedModule ? [selectedModule] : MONITORING_MODULES
 
-  for (const module of MONITORING_MODULES) {
+  for (const module of modules) {
     onProgress?.(`Membaca sheet ${module.label}…`)
     const worksheet = module.sheetNames
       .map((name) => worksheets.get(normalizeMonitoringHeader(name)))
@@ -222,7 +227,9 @@ export async function importMonitoringWorkbook(file, onProgress) {
   }
 
   if (missing.length) {
-    throw new Error(`Sheet berikut belum ditemukan: ${missing.join(', ')}. Pastikan workbook mencakup seluruh menu Monitoring.`)
+    throw new Error(selectedModule
+      ? `Sheet ${selectedModule.sheetNames[0]} tidak ditemukan pada workbook.`
+      : `Sheet berikut belum ditemukan: ${missing.join(', ')}. Pastikan workbook mencakup seluruh menu Monitoring.`)
   }
 
   const vendor = datasets.vendor

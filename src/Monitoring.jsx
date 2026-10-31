@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import ExcelJS from 'exceljs'
 import {
   Activity, ArrowDownToLine, ArrowUpFromLine, Boxes, Cloud, Database, FileSpreadsheet, Filter, Gauge, Plus, Printer, RefreshCw,
@@ -7,7 +7,11 @@ import {
 import {
   Bar, BarChart, CartesianGrid, Cell, ComposedChart, Legend, Line, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
-import { getTibetDisplayRows, importMonitoringWorkbook, MONITORING_MODULES, normalizeMonitoringHeader } from './lib/monitoringWorkbook.js'
+import { importMonitoringWorkbook, MONITORING_MODULES, normalizeMonitoringHeader } from './lib/monitoringWorkbook.js'
+import {
+  buildTibetDetailRows, buildTibetMetrics, buildTibetProgramChart, buildTibetVendorChart, normalizeTibetRows,
+  getTibetMetricTotal, getTibetMetricValue, sumTibetDetailRows, TIBET_DETAIL_METRICS, TIBET_PROGRAMS, TIBET_SIZES,
+} from './lib/tibetMonitoring.js'
 import { readRabMaterialFile, summarizeRabMaterials } from './lib/rabDatabase.js'
 import './monitoring.css'
 
@@ -19,13 +23,14 @@ const EMPTY_FILTER_FIELDS = []
 const MONTHS = ['JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI', 'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER']
 const NUMBER_FORMAT = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2 })
 const CURRENCY_FORMAT = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 })
+const DATE_FORMAT = new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })
 
 const MODULE_INFO = {
   spb: { eyebrow: 'PENGADAAN MATERIAL', description: 'Pantau penerbitan SPB, progres kedatangan, dan volume material berdasarkan POS.', icon: FileSpreadsheet },
   stock: { eyebrow: 'PERSEDIAAN MATERIAL', description: 'Bandingkan kebutuhan POS dengan stok gudang dan rata-rata pemakaian.', icon: Boxes },
   load: { eyebrow: 'KEANDALAN SISTEM', description: 'Tinjau beban penyulang dan gardu induk dari data bulanan.', icon: Gauge },
   rabDatabase: { eyebrow: 'REFERENSI MATERIAL RAB', description: 'Telusuri material, volume, dan harga satuan yang tersimpan per ID RAB.', icon: Database },
-  tibet: { eyebrow: 'KONTRAK TIBET', description: 'Bandingkan volume kontrak, kebutuhan pelanggan, dan progres pemasangan.', icon: Activity },
+  tibet: { eyebrow: 'MONITORING TIBET', description: 'Pantau data KR, PK, volume tiang, pemasangan, dan sisa pekerjaan dari sheet MONITORING TIBET.', icon: Activity },
   vendor: { eyebrow: 'PENGENDALIAN KONTRAK', description: 'Pantau nilai kontrak vendor, realisasi, sisa kontrak, dan lingkup pekerjaan.', icon: ShieldCheck },
   customers: { eyebrow: 'KEBUTUHAN PELANGGAN', description: 'Tinjau progres layanan pelanggan serta kebutuhan material per ULP.', icon: Users },
 }
@@ -35,7 +40,7 @@ const MODULE_FIELDS = {
   stock: ['NORMALISASI', 'NAMA BARANG', 'NAMA MATERIAL', 'VOL 61', 'VOL 62', 'VOL GUDANG', 'RATA-RATA PER BULAN', 'RATA-RATA PER TAHUN', 'STATUS', 'KRITERIA MATERIAL'],
   load: ['UP3', 'PENYULANG', 'BEBAN SIANG', 'BEBAN MALAM', 'MAX', 'SET OC', '% PEMBEBANAN PENYULANG', 'GARDU INDUK', 'DAYA', 'I NOM', 'BEBAN (I)', '% BEBAN TRAFO GI', 'KETERANGAN'],
   rabDatabase: ['UPDATED_AT', 'ID RAB', 'PRK', 'NAMA FILE', 'REKAP AKTIF', 'SHEET DETAIL', 'BARIS', 'URAIAN MATERIAL', 'VOLUME', 'JENIS PEKERJAAN', 'HARGA SATUAN'],
-  tibet: ['VENDOR', 'NOMOR KR', 'JENIS TIBET', 'NO PK', 'POS', 'VOL KR', 'VOL PK', 'VOL PASANG', 'SISA KR', 'SISA PK'],
+  tibet: ['POS', 'PROG', 'TAHUN', 'UKURAN', 'PABRIKAN', 'NO KR', 'TGL KR', 'VOL KR', 'NO PK', 'VOL PK', 'SISA KR', 'SDH PSG', 'BLM PSG', 'TGL AWAL PK', 'TGL AKHIR PK'],
   vendor: ['NOMOR KONTRAK', 'VENDOR', 'NILAI KONTRAK', 'NOMOR PK', 'NAMA PELANGGAN', 'NILAI PK', 'REALISASI (Rp)', 'SISA KONTRAK', 'PENGAWAS', 'MV Cell GI (buah)', 'MV Cell GD/GH (buah)', 'JTM (kms)', 'Tiang TM (buah)', 'Switching Motorized (buah)', 'Double Switching 20 kV (buah)', 'Switching Manual (buah)', 'GD/GH (buah)', 'Trafo Distribusi (buah)', 'Trafo Distribusi (KVA)', 'PHBTR (buah)', 'JTR (kms)', 'Tiang TR (buah)', 'LAIN-LAIN', 'Nomor WO', 'NO SAP MATERIAL', 'NAMA MATERIAL', 'JUMLAH MATERIAL', 'Nomor SUB ID', 'STATUS KONTRAK'],
   customers: ['NO', 'NAMA', 'TARIF', 'JENIS PLG', 'DAYA', 'PK', 'PROGRESS', 'NO PK', 'NO KONTRAK', 'ULP', 'KETERANGAN KENDALA', 'TIANG 13', 'TIANG 9', 'A3CS 150', 'MVTIC', 'KABEL TANAM', 'TRF 400', 'TRF 250', 'TRF 200', 'TRF 160', 'TRF 100', 'TRF 50', 'KONS A1', 'KONS A2', 'KONS A3', 'KONS B1', 'KONS B3', 'ISO TUMPU', 'ISO TARIK', 'SUSP', 'LA', 'DE', 'ADE', 'PHBTR 1 TIANG', 'PHBTR 2 TIANG', 'FCO', 'ARRESTER', 'CUBICLE', 'NYY 70', 'NYY 150', 'LVTC', 'KWH UKUR LANGSUNG', 'KWH UKUR TAK LANGSUNG', 'Pasca Bayar', 'Pra Bayar'],
 }
@@ -45,7 +50,7 @@ const FILTER_FIELDS = {
   stock: ['KRITERIA MATERIAL', 'STATUS', 'NAMA MATERIAL'],
   load: ['UP3', 'GARDU INDUK', 'PENYULANG', 'KARAKTERISTIK BEBAN'],
   rabDatabase: ['PRK', 'ID RAB'],
-  tibet: ['NOMOR KR', 'VENDOR'],
+  tibet: ['NO KR', 'PABRIKAN'],
   vendor: ['NOMOR KONTRAK', 'NOMOR PK', 'NOMOR WO', 'STATUS KONTRAK'],
   customers: ['PROGRESS', 'ULP', 'MATERIAL'],
 }
@@ -55,7 +60,7 @@ const KPI_FIELDS = {
   stock: [['NORMALISASI', 'Material terdaftar'], ['VOL 61', 'Stok POS 61'], ['VOL 62', 'Stok POS 62'], ['VOL GUDANG', 'Stok gudang']],
   load: [['PENYULANG', 'Penyulang'], ['BEBAN SIANG', 'Beban siang'], ['BEBAN MALAM', 'Beban malam'], ['% PEMBEBANAN PENYULANG', 'Rata-rata beban']],
   rabDatabase: [['ID RAB', 'ID RAB'], ['PRK', 'PRK'], ['URAIAN MATERIAL', 'Baris material'], ['VOLUME', 'Total volume']],
-  tibet: [['NOMOR KR', 'Jumlah KR'], ['NO PK', 'Jumlah PK'], ['VOL KR', 'Jumlah VOL KR'], ['VOL PK', 'Jumlah VOL PK'], ['VOL PASANG', 'Terpasang'], ['SISA KR', 'Sisa KR'], ['SISA PK', 'Sisa PK']],
+  tibet: [['NO KR', 'Jumlah KR'], ['NO PK', 'Jumlah PK'], ['VOL KR', 'Jumlah VOL KR'], ['VOL PK', 'Jumlah VOL PK'], ['SDH PSG', 'Terpasang'], ['BLM PSG', 'Belum Terpasang'], ['SISA KR', 'Sisa KR'], ['SISA PK', 'Sisa PK']],
   vendor: [['NOMOR KONTRAK', 'Kontrak vendor'], ['VENDOR', 'Nama Vendor'], ['NILAI KONTRAK', 'Nilai kontrak'], ['REALISASI (Rp)', 'Total realisasi'], ['SISA KONTRAK', 'Sisa kontrak']],
   customers: [['NAMA', 'Pelanggan terdata'], ['PK', 'PK sudah'], ['ULP', 'ULP'], ['DAYA', 'Total daya'], ['PROGRESS', 'Sudah nyala']],
 }
@@ -76,6 +81,19 @@ function readStoredDatasets() {
 function getColumnIndex(headers, names) {
   const candidates = (Array.isArray(names) ? names : [names]).map(normalizeMonitoringHeader)
   return headers.findIndex((header) => candidates.includes(normalizeMonitoringHeader(header)))
+}
+
+function prepareTibetDataset(dataset) {
+  const requiredHeaders = ['PROG', 'UKURAN', 'PABRIKAN', 'NO KR', 'VOL KR', 'NO PK', 'VOL PK']
+  const headers = dataset?.headers
+  if (!Array.isArray(headers) || !Array.isArray(dataset.rows)) {
+    throw new Error('Data sheet MONITORING TIBET kosong atau tidak terbaca.')
+  }
+  const missingHeaders = requiredHeaders.filter((header) => getColumnIndex(headers, header) < 0)
+  if (missingHeaders.length) {
+    throw new Error(`Apps Script belum membaca sheet MONITORING TIBET. Header tidak ditemukan: ${missingHeaders.join(', ')}. Deploy versi terbaru apps-script/Code.gs, lalu sinkronkan kembali.`)
+  }
+  return { ...dataset, rows: normalizeTibetRows(headers, dataset.rows) }
 }
 
 function cell(row, index) {
@@ -106,11 +124,6 @@ function sumColumn(rows, index) {
   return rows.reduce((total, row) => total + numberValue(cell(row, index)), 0)
 }
 
-function getTibetSummaryRows(headers, rows) {
-  const pkIndex = getColumnIndex(headers, 'NO PK')
-  return rows.filter((row) => !String(cell(row, pkIndex)).trim())
-}
-
 function averageColumn(rows, index) {
   return rows.length ? sumColumn(rows, index) / rows.length : 0
 }
@@ -121,6 +134,11 @@ function isCurrencyHeader(header) {
 
 function formatCell(value, header) {
   if (value === '' || value === null || value === undefined) return '-'
+  if (/^TGL/i.test(header) && value instanceof Date && Number.isFinite(value.getTime())) return DATE_FORMAT.format(value)
+  if (/^TGL/i.test(header) && typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    const date = new Date(value)
+    if (Number.isFinite(date.getTime())) return DATE_FORMAT.format(date)
+  }
   if (typeof value === 'number' && isCurrencyHeader(header)) return CURRENCY_FORMAT.format(value)
   if (typeof value === 'number') return NUMBER_FORMAT.format(value)
   return String(value)
@@ -154,9 +172,17 @@ function buildMetrics(moduleId, dataset, rows, selectedFilters = {}) {
         : field === 'URAIAN MATERIAL' ? rows.filter((row) => cell(row, index)).length
           : sumColumn(rows, index)
     } else if (moduleId === 'tibet') {
-      if (field === 'NOMOR KR' || field === 'NO PK') value = uniqueCount(rows, index)
-      else if (['VOL KR', 'VOL PK', 'VOL PASANG'].includes(field)) value = sumColumn(getTibetSummaryRows(headers, rows), index)
-      else value = sumColumn(rows, index)
+      const tibetMetrics = buildTibetMetrics(headers, rows)
+      value = ({
+        'NOKR': tibetMetrics.krCount,
+        'NOPK': tibetMetrics.pkCount,
+        'VOLKR': tibetMetrics.volumeKr,
+        'VOLPK': tibetMetrics.volumePk,
+        'SDHPSG': tibetMetrics.installed,
+        'SISAKR': tibetMetrics.remainingKr,
+        'SISAPK': tibetMetrics.remainingPk,
+        'BLMPSG': tibetMetrics.notInstalled,
+      })[normalizeMonitoringHeader(field)] ?? 0
     } else if (moduleId === 'vendor') {
       if (field === 'NOMOR KONTRAK') value = uniqueCount(rows, index)
       else if (field === 'VENDOR') {
@@ -273,27 +299,7 @@ function buildChartData(moduleId, dataset, rows, selectedFilters = {}) {
     label: '8 material dengan volume terbesar',
   }
   if (moduleId === 'tibet') {
-    const vendorIndex = getColumnIndex(headers, 'VENDOR')
-    const pkIndex = getColumnIndex(headers, 'NO PK')
-    const volumeIndexes = ['VOL KR', 'VOL PK', 'VOL PASANG'].map((field) => [field, getColumnIndex(headers, field)])
-    const groups = new Map()
-    let activeVendor = ''
-    rows.forEach((row) => {
-      const vendor = String(cell(row, vendorIndex)).trim()
-      if (vendor) activeVendor = vendor
-      if (String(cell(row, pkIndex)).trim()) return
-      const name = vendor || activeVendor || 'Tidak diketahui'
-      const item = groups.get(name) || { name, 'VOL KR': 0, 'VOL PK': 0, 'VOL PASANG': 0 }
-      volumeIndexes.forEach(([field, index]) => {
-        item[field] += numberValue(cell(row, index))
-      })
-      groups.set(name, item)
-    })
-    return {
-      data: [...groups.values()].sort((left, right) => right['VOL KR'] - left['VOL KR']).slice(0, 8),
-      bars: [['VOL KR', 'Volume KR', '#0782bd'], ['VOL PK', 'Volume PK', '#24bfd3'], ['VOL PASANG', 'Terpasang', '#79b86a']],
-      label: 'Volume kontrak dan pemasangan per vendor',
-    }
+    return buildTibetProgramChart(headers, rows)
   }
   if (moduleId === 'vendor') {
     const materialIndex = getColumnIndex(headers, 'NAMA MATERIAL')
@@ -482,11 +488,6 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoa
     const remaining = headers.map((_, index) => index).filter((index) => !selected.includes(index))
     return [...selected, ...remaining]
   }, [headers, module.id])
-  const tibetDisplayRows = useMemo(() => {
-    if (module.id !== 'tibet' || !dataset) return new Map()
-    const displayRows = getTibetDisplayRows(headers, dataset.rows)
-    return new Map(dataset.rows.map((row, index) => [row, displayRows[index]]))
-  }, [dataset, headers, module.id])
   const filterFields = FILTER_FIELDS[module.id] || EMPTY_FILTER_FIELDS
   const [selectedFilters, setSelectedFilters] = useState({})
   const filteredRows = useMemo(() => {
@@ -499,8 +500,8 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoa
       const rowContract = String(cell(row, getColumnIndex(headers, 'NOMOR KONTRAK'))).trim()
       if (rowContract) activeContract = rowContract
       if (module.id === 'tibet') {
-        const rowVendor = String(cell(row, getColumnIndex(headers, 'VENDOR'))).trim()
-        const rowKr = String(cell(row, getColumnIndex(headers, 'NOMOR KR'))).trim()
+        const rowVendor = String(cell(row, getColumnIndex(headers, ['PABRIKAN', 'VENDOR']))).trim()
+        const rowKr = String(cell(row, getColumnIndex(headers, 'NO KR'))).trim()
         if (rowVendor) activeTibetVendor = rowVendor
         if (rowKr) activeTibetKr = rowKr
       }
@@ -515,9 +516,9 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoa
         } else if (field === 'KARAKTERISTIK BEBAN') {
           const index = getColumnIndex(headers, selected === 'SIANG' ? 'BEBAN SIANG' : 'BEBAN MALAM')
           if (!String(cell(row, index)).trim() || numberValue(cell(row, index)) === 0) return false
-        } else if (module.id === 'tibet' && (field === 'VENDOR' || field === 'NOMOR KR')) {
+        } else if (module.id === 'tibet' && (field === 'PABRIKAN' || field === 'NO KR')) {
           const index = getColumnIndex(headers, field)
-          const value = String(cell(row, index)).trim() || (field === 'VENDOR' ? activeTibetVendor : activeTibetKr)
+          const value = String(cell(row, index)).trim() || (field === 'PABRIKAN' ? activeTibetVendor : activeTibetKr)
           if (value !== selected) return false
         } else {
           const index = getColumnIndex(headers, field)
@@ -527,20 +528,29 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoa
       return !term || row.some((value) => String(value ?? '').toLocaleLowerCase('id').includes(term))
     })
   }, [dataset, filterFields, headers, module.id, search, selectedFilters])
+  const tibetDetailRows = useMemo(() => module.id === 'tibet'
+    ? buildTibetDetailRows(headers, filteredRows)
+    : EMPTY_ROWS, [filteredRows, headers, module.id])
+  const tableRows = module.id === 'tibet' ? tibetDetailRows : filteredRows
   const optionsByField = useMemo(() => Object.fromEntries(filterFields.map((field) => [field, field === 'MATERIAL'
     ? headers.slice(11, 44).filter((header) => header.trim())
     : field === 'KARAKTERISTIK BEBAN' ? ['SIANG', 'MALAM']
     : getFilterOptions(dataset, field)])), [dataset, filterFields, headers])
   const metrics = useMemo(() => buildMetrics(module.id, dataset, filteredRows, selectedFilters), [dataset, filteredRows, module.id, selectedFilters])
   const chart = useMemo(() => buildChartData(module.id, dataset, filteredRows, selectedFilters), [dataset, filteredRows, module.id, selectedFilters])
-  const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE))
+  const tibetVendorChart = useMemo(() => module.id === 'tibet'
+    ? buildTibetVendorChart(headers, filteredRows)
+    : null, [filteredRows, headers, module.id])
+  const pageCount = Math.max(1, Math.ceil(tableRows.length / PAGE_SIZE))
   const currentPage = Math.min(page, pageCount)
-  const visibleRows = filteredRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+  const visibleRows = tableRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+  const tibetTotals = useMemo(() => module.id === 'tibet' ? sumTibetDetailRows(tibetDetailRows) : null, [module.id, tibetDetailRows])
   const loadedCount = Object.values(datasets).reduce((total, item) => total + (item?.rows?.length || 0), 0)
   const Icon = info.icon
   const isCustomerModule = module.id === 'customers'
   const isVendorModule = module.id === 'vendor'
   const isRabModule = module.id === 'rabDatabase'
+  const isTibetModule = module.id === 'tibet'
   const rabDatabaseRows = datasets.rabDatabase?.rows || EMPTY_ROWS
   const rabPrkOptions = useMemo(() => [...new Set(rabDatabaseRows.map((row) => String(cell(row, 2)).trim()).filter(Boolean))].sort(), [rabDatabaseRows])
   const rabIdOptions = useMemo(() => [...new Set(rabDatabaseRows.map((row) => String(cell(row, 1)).trim()).filter(Boolean))].sort(), [rabDatabaseRows])
@@ -572,29 +582,69 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoa
   useEffect(() => {
     let cancelled = false
     const localDatasets = readStoredDatasets()
-    onLoadMonitoring().then((remoteDatasets) => {
-      if (cancelled) return
-      const hasRemoteDatasets = Object.keys(remoteDatasets).length > 0
-      if (hasRemoteDatasets) {
-        setDatasets(remoteDatasets)
-        setNeedsCloudMigration(false)
-        try {
-          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(remoteDatasets))
-        } catch (storageError) {
-          console.warn('Cache Monitoring lokal tidak dapat diperbarui.', storageError)
+    const loadDatasets = async () => {
+      let nextDatasets = localDatasets
+      try {
+        const remoteDatasets = await onLoadMonitoring()
+        if (cancelled) return
+        if (Object.keys(remoteDatasets).length > 0) {
+          nextDatasets = remoteDatasets
+          setDatasets(remoteDatasets)
+          setNeedsCloudMigration(false)
         }
-      } else {
-        setNeedsCloudMigration(Object.keys(localDatasets).length > 0)
+      } catch (loadError) {
+        if (cancelled) return
+        console.error('Data Monitoring gagal dimuat dari Google Sheets.', loadError)
+        setError(loadError instanceof Error ? loadError.message : 'Data Monitoring gagal dimuat dari Google Sheets.')
       }
-    }).catch((loadError) => {
-      if (cancelled) return
-      console.error('Data Monitoring gagal dimuat dari Google Sheets.', loadError)
-      setError(loadError instanceof Error ? loadError.message : 'Data Monitoring gagal dimuat dari Google Sheets.')
-    }).finally(() => {
-      if (!cancelled) setCloudLoading(false)
-    })
+      if (Object.keys(nextDatasets).length === 0) setNeedsCloudMigration(Object.keys(localDatasets).length > 0)
+
+      if (module.id === 'tibet') {
+        setImportStage('Menyinkronkan sheet MONITORING TIBET...')
+        try {
+          const sourceDatasets = await onLoadMonitoringSource('tibet')
+          const tibetDataset = prepareTibetDataset(sourceDatasets.tibet)
+          nextDatasets = { ...nextDatasets, tibet: tibetDataset }
+          if (cancelled) return
+          setDatasets(nextDatasets)
+          try {
+            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextDatasets))
+          } catch (storageError) {
+            console.warn('Cache data Tibet lokal tidak dapat diperbarui.', storageError)
+          }
+          if (!readOnly) {
+            setCloudSaving(true)
+            try {
+              await onSaveMonitoring({ tibet: tibetDataset })
+              if (!cancelled) {
+                setError('')
+                onNotice(`Data Tibet terbaru (${tibetDataset.rows.length.toLocaleString('id-ID')} baris) tersinkron ke Google Sheets aplikasi.`)
+              }
+            } catch (saveError) {
+              if (!cancelled) {
+                console.error('Sinkronisasi data Tibet ke Google Sheets gagal.', saveError)
+                setError(saveError instanceof Error ? saveError.message : 'Data Tibet gagal disimpan ke Google Sheets aplikasi.')
+              }
+            } finally {
+              if (!cancelled) setCloudSaving(false)
+            }
+          }
+        } catch (sourceError) {
+          if (!cancelled) {
+            console.error('Sheet MONITORING TIBET gagal disinkronkan dari Google Sheets sumber.', sourceError)
+            setError(sourceError instanceof Error ? sourceError.message : 'Data MONITORING TIBET gagal disinkronkan.')
+          }
+        }
+      }
+
+      if (!cancelled) {
+        setImportStage('')
+        setCloudLoading(false)
+      }
+    }
+    void loadDatasets()
     return () => { cancelled = true }
-  }, [module.id, onLoadMonitoring])
+  }, [module.id, onLoadMonitoring, onLoadMonitoringSource, onNotice, onSaveMonitoring, readOnly])
 
   async function persistDatasets(nextDatasets, datasetsToSync, successMessage) {
     setCloudSaving(true)
@@ -806,12 +856,28 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoa
     const file = event.target.files?.[0]
     event.target.value = ''
     if (!file) return
-    if (loadedCount && !window.confirm('Data Monitoring yang tersimpan akan diganti dengan isi workbook ini. Lanjutkan?')) return
+    const tibetOnlyImport = module.id === 'tibet'
+    if (tibetOnlyImport && dataset?.rows?.length
+      && !window.confirm('Data Monitoring Tibet yang tersimpan akan diganti dengan sheet MONITORING TIBET dari workbook ini. Lanjutkan?')) return
+    if (!tibetOnlyImport && loadedCount
+      && !window.confirm('Data Monitoring yang tersimpan akan diganti dengan isi workbook ini. Lanjutkan?')) return
     setImporting(true)
     setError('')
     try {
-      const imported = await importMonitoringWorkbook(file, setImportStage)
-      const saved = await persistDatasets(imported, imported, `Workbook berhasil diimpor dan disimpan ke Google Sheets: ${MONITORING_MODULES.length} menu.`)
+      const imported = await importMonitoringWorkbook(
+        file,
+        setImportStage,
+        tibetOnlyImport ? { moduleId: module.id } : undefined,
+      )
+      if (tibetOnlyImport) imported.tibet = prepareTibetDataset(imported.tibet)
+      const nextDatasets = { ...datasets, ...imported }
+      const saved = await persistDatasets(
+        nextDatasets,
+        imported,
+        tibetOnlyImport
+          ? `Sheet ${imported[module.id].sheetName} berhasil diimpor dan disimpan ke Google Sheets aplikasi.`
+          : `Workbook berhasil diimpor dan disimpan ke Google Sheets: ${MONITORING_MODULES.length} menu.`
+      )
       if (!saved) return
       setSearch('')
       setSelectedFilters({})
@@ -826,20 +892,24 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoa
   }
 
   async function handleLoadFromGoogleSheets() {
-    if (loadedCount && !window.confirm('Data Monitoring yang tersimpan di aplikasi akan diganti dengan data dari Google Sheets sumber. Lanjutkan?')) return
+    if (dataset?.rows?.length && !window.confirm(`Data ${module.label} yang tersimpan di aplikasi akan diganti dengan data dari Google Sheets sumber. Lanjutkan?`)) return
     setImporting(true)
     setImportStage('Mengambil data dari Google Sheets sumber…')
     setError('')
     try {
-      const imported = await onLoadMonitoringSource()
-      const missingModules = MONITORING_MODULES
+      const sourceDatasets = await onLoadMonitoringSource(module.id)
+      const imported = module.id === 'tibet'
+        ? { tibet: prepareTibetDataset(sourceDatasets.tibet) }
+        : sourceDatasets
+      const missingModules = [module]
         .filter(({ id }) => !imported[id] || !Array.isArray(imported[id].headers) || !Array.isArray(imported[id].rows))
         .map(({ label }) => label)
       if (missingModules.length) throw new Error(`Data menu berikut tidak ditemukan: ${missingModules.join(', ')}.`)
+      const nextDatasets = { ...datasets, ...imported }
       const saved = await persistDatasets(
+        nextDatasets,
         imported,
-        imported,
-        `Data berhasil diambil dari Google Sheets sumber dan disimpan ke tab aplikasi: ${MONITORING_MODULES.length} menu.`
+        `Data ${module.label} dari sheet ${imported[module.id].sheetName} berhasil disimpan ke Google Sheets aplikasi.`
       )
       if (!saved) return
       setSearch('')
@@ -860,7 +930,7 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoa
       <div className="monitoring-heading-copy">
         <p className="eyebrow">{info.eyebrow}</p>
         <h1>{module.label}</h1>
-        <p>{info.description}{cloudLoading ? ' · Memuat data Google Sheets...' : ''}</p>
+        <p>{info.description}{cloudLoading ? isTibetModule ? ' · Menyinkronkan sheet sumber...' : ' · Memuat data Google Sheets...' : ''}</p>
       </div>
       <div className={`monitoring-heading-actions${isVendorModule ? ' monitoring-heading-actions-vendor' : ''}`}>
         {dataset && <span className="monitoring-import-status"><span /> {dataset.rows.length.toLocaleString('id-ID')} baris · {dataset.sheetName}</span>}
@@ -868,8 +938,8 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoa
         {needsCloudMigration && !readOnly && <button className="button button-primary" type="button" onClick={migrateLocalData} disabled={cloudSaving || cloudLoading}><Database size={15} /><span>Simpan data browser ke Google Sheets</span></button>}
         <input ref={fileInput} className="monitoring-file-input" type="file" accept=".xlsx,.xlsm" onChange={handleImport} aria-label="Pilih workbook Monitoring" />
         {!readOnly && <button className="button button-secondary" type="button" onClick={handleLoadFromGoogleSheets} disabled={importing || cloudLoading || cloudSaving}>
-          {importing ? <span className="monitoring-spinner" /> : <Cloud size={15} />}
-          <span>{importing ? 'Mengambil data…' : 'Ambil dari Google Sheets'}</span>
+          {importing ? <span className="monitoring-spinner" /> : isTibetModule ? <RefreshCw size={15} /> : <Cloud size={15} />}
+          <span>{importing ? 'Menyinkronkan…' : isTibetModule ? 'Sinkronkan Data' : 'Ambil dari Google Sheets'}</span>
         </button>}
         {isVendorModule && <>
           <button className="button button-secondary" type="button" onClick={refreshStoredData} disabled={cloudLoading || cloudSaving}><RefreshCw size={14} /><span>Refresh Data</span></button>
@@ -886,7 +956,9 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoa
 
     <div className="monitoring-import-hint">
       <FileSpreadsheet size={15} />
-      <span>Ambil data langsung dari Google Sheets sumber, atau impor workbook Excel untuk memuat seluruh 7 menu Monitoring. Data yang diambil akan disimpan pada tab Monitoring milik aplikasi.</span>
+      <span>{module.id === 'tibet'
+        ? 'Ambil data dari sheet MONITORING TIBET pada Google Sheets sumber atau impor workbook Excel dengan sheet tersebut. Data tersimpan pada tab MON_TIBET milik aplikasi.'
+        : 'Ambil data dari sheet Google Sheets sumber untuk menu ini, atau impor workbook Excel. Data yang diambil akan disimpan pada tab Monitoring milik aplikasi.'}</span>
     </div>
     {needsCloudMigration && <div className="monitoring-cloud-migration" role="status"><Database size={15} /><span>Data Monitoring lama ditemukan di browser ini, tetapi belum ada di Google Sheets. Pilih <strong>Simpan data browser ke Google Sheets</strong> untuk memindahkannya.</span></div>}
     {importing && <div className="monitoring-import-progress" role="status">{importStage}</div>}
@@ -934,7 +1006,9 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoa
     {!dataset ? <section className="panel monitoring-empty-state">
       <div className="monitoring-empty-icon"><FileSpreadsheet size={24} /></div>
       <h2>Mulai dengan impor data Monitoring</h2>
-      <p>Ambil data langsung dari Google Sheets sumber atau pilih workbook Excel. Sheet SPB, Stock Gudang, Beban, Database RAB, Tibet, Kontrak Vendor, dan Kebutuhan Pelanggan akan dibaca sekaligus.</p>
+      <p>{module.id === 'tibet'
+        ? 'Ambil data dari sheet MONITORING TIBET pada spreadsheet sumber atau impor workbook Excel.'
+        : 'Ambil data dari Google Sheets sumber atau pilih workbook Excel untuk mengisi menu Monitoring.'}</p>
       {!readOnly && <button className="button button-secondary" type="button" onClick={handleLoadFromGoogleSheets} disabled={importing || cloudLoading || cloudSaving}><Cloud size={15} /> Ambil dari Google Sheets</button>}
       <button className="button button-primary" type="button" onClick={() => fileInput.current?.click()} disabled={importing || cloudLoading || cloudSaving}><ArrowUpFromLine size={16} /> Pilih workbook</button>
     </section> : <>
@@ -955,6 +1029,16 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoa
           <div className={`monitoring-chart${chart.layout === 'vertical' ? ' is-horizontal' : ''}`} style={chart.dynamicHeight ? { height: chart.dynamicHeight } : undefined}><MonitoringChart chart={chart} /></div>
         </div>
       </section>
+
+      {tibetVendorChart && <section className="panel monitoring-chart-panel">
+        <div className="monitoring-panel-heading">
+          <div><p className="eyebrow">VOLUME PER VENDOR</p><h2>{tibetVendorChart.label}</h2></div>
+          <span className="monitoring-chart-note"><Zap size={13} /> Grafik mengikuti filter tabel</span>
+        </div>
+        <div className={`monitoring-chart-viewport${tibetVendorChart.scrollable ? ' is-scrollable' : ''}`}>
+          <div className={`monitoring-chart${tibetVendorChart.layout === 'vertical' ? ' is-horizontal' : ''}`} style={{ height: tibetVendorChart.dynamicHeight }}><MonitoringChart chart={tibetVendorChart} /></div>
+        </div>
+      </section>}
 
       {isVendorModule && <section className="panel monitoring-chart-panel">
         <div className="monitoring-panel-heading">
@@ -1036,7 +1120,9 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoa
         <div className="monitoring-panel-heading monitoring-table-heading">
           <div><p className="eyebrow">DATA TERSIMPAN</p><h2>Rincian {module.label}</h2></div>
           <div className="monitoring-table-actions">
-            <span className="monitoring-row-count">{filteredRows.length.toLocaleString('id-ID')} dari {dataset.rows.length.toLocaleString('id-ID')} baris</span>
+            <span className="monitoring-row-count">{module.id === 'tibet'
+              ? `${tableRows.length.toLocaleString('id-ID')} kontrak · ${filteredRows.length.toLocaleString('id-ID')} baris sumber`
+              : `${tableRows.length.toLocaleString('id-ID')} dari ${dataset.rows.length.toLocaleString('id-ID')} baris`}</span>
             {isCustomerModule && <>
               <button className="button button-secondary monitoring-refresh-button" type="button" onClick={refreshStoredData} disabled={cloudLoading || cloudSaving}><RefreshCw size={14} /><span>Refresh Data</span></button>
               {!readOnly && <button className="button button-primary monitoring-add-button" type="button" onClick={openCustomerForm} disabled={cloudLoading || cloudSaving}><Plus size={15} /><span>Tambah Data</span></button>}
@@ -1051,20 +1137,60 @@ export default function Monitoring({ moduleId, onNotice, onLoadMonitoring, onLoa
           </select></label>)}
         </div>
         <div className="monitoring-table-scroll">
-          <table>
+          {module.id === 'tibet' ? <table className="tibet-detail-table">
+            <thead>
+              <tr>
+                <th rowSpan={3}>NO KR</th>
+                <th rowSpan={3}>VENDOR</th>
+                {TIBET_DETAIL_METRICS.map((metric) => <th className={`tibet-group-${metric.id}`} key={metric.id} colSpan={TIBET_PROGRAMS.length * TIBET_SIZES.length + 1}>{metric.label}</th>)}
+                <th rowSpan={3}>KETERANGAN</th>
+              </tr>
+              <tr>
+                {TIBET_DETAIL_METRICS.flatMap((metric) => [
+                  ...TIBET_PROGRAMS.map((program) => <th className={`tibet-program-${metric.id}`} key={`${metric.id}-${program}`} colSpan={TIBET_SIZES.length}>{program}</th>),
+                  <th className={`tibet-total-${metric.id}`} key={`${metric.id}-total`} rowSpan={2}>TOTAL</th>,
+                ])}
+              </tr>
+              <tr>
+                {TIBET_DETAIL_METRICS.flatMap((metric) => TIBET_PROGRAMS.flatMap((program) => TIBET_SIZES.map((size) => (
+                  <th className={`tibet-size-${metric.id}`} key={`${metric.id}-${program}-${size}`}>{size}</th>
+                ))))}
+              </tr>
+            </thead>
+            <tbody>{visibleRows.length ? visibleRows.map((row) => <tr key={row.key}>
+              <td className="tibet-detail-identity">{row.kr}</td>
+              <td className="tibet-detail-identity">{row.vendor}</td>
+              {TIBET_DETAIL_METRICS.map(({ id }) => <Fragment key={id}>
+                {TIBET_PROGRAMS.flatMap((program) => TIBET_SIZES.map((size) => (
+                  <td className="tibet-detail-number" key={`${id}-${program}-${size}`}>{NUMBER_FORMAT.format(getTibetMetricValue(row, id, program, size))}</td>
+                )))}
+                <td className="tibet-detail-number tibet-detail-total">{NUMBER_FORMAT.format(getTibetMetricTotal(row, id))}</td>
+              </Fragment>)}
+              <td className="tibet-detail-note">{row.notes}</td>
+            </tr>) : <tr><td className="monitoring-no-data" colSpan={TIBET_DETAIL_METRICS.length * (TIBET_PROGRAMS.length * TIBET_SIZES.length + 1) + 3}><Search size={18} />Tidak ada data yang cocok dengan filter.</td></tr>}</tbody>
+            {visibleRows.length > 0 && <tfoot><tr>
+              <td className="tibet-detail-total-label" colSpan={2}>TOTAL DATA TERSIMPAN</td>
+              {TIBET_DETAIL_METRICS.map(({ id }) => <Fragment key={id}>
+                {TIBET_PROGRAMS.flatMap((program) => TIBET_SIZES.map((size) => (
+                  <td className="tibet-detail-number" key={`${id}-${program}-${size}`}>{NUMBER_FORMAT.format(getTibetMetricValue(tibetTotals, id, program, size))}</td>
+                )))}
+                <td className="tibet-detail-number tibet-detail-total">{NUMBER_FORMAT.format(getTibetMetricTotal(tibetTotals, id))}</td>
+              </Fragment>)}
+              <td />
+            </tr></tfoot>}
+          </table> : <table>
             <thead><tr><th className="monitoring-row-number">No.</th>{columns.map((index) => <th key={`${index}-${headers[index]}`}>{headers[index]}</th>)}</tr></thead>
             <tbody>{visibleRows.length ? visibleRows.map((row, rowIndex) => <tr key={`${currentPage}-${rowIndex}`}>
               <td className="monitoring-row-number">{((currentPage - 1) * PAGE_SIZE + rowIndex + 1).toLocaleString('id-ID')}</td>
               {columns.map((columnIndex) => {
-                const displayRow = tibetDisplayRows.get(row) || row
-                const value = cell(displayRow, columnIndex)
-                return <td key={columnIndex} title={String(value)}>{module.id === 'tibet' && (value === '' || value === null || value === undefined) ? '' : formatCell(value, headers[columnIndex])}</td>
+                const value = cell(row, columnIndex)
+                return <td key={columnIndex} title={String(value)}>{formatCell(value, headers[columnIndex])}</td>
               })}
             </tr>) : <tr><td className="monitoring-no-data" colSpan={columns.length + 1}><Search size={18} />Tidak ada data yang cocok dengan filter.</td></tr>}</tbody>
-          </table>
+          </table>}
         </div>
         <footer className="monitoring-table-footer">
-          <span>Menampilkan {visibleRows.length ? ((currentPage - 1) * PAGE_SIZE + 1).toLocaleString('id-ID') : 0}–{Math.min(currentPage * PAGE_SIZE, filteredRows.length).toLocaleString('id-ID')} dari {filteredRows.length.toLocaleString('id-ID')} baris</span>
+          <span>Menampilkan {visibleRows.length ? ((currentPage - 1) * PAGE_SIZE + 1).toLocaleString('id-ID') : 0}–{Math.min(currentPage * PAGE_SIZE, tableRows.length).toLocaleString('id-ID')} dari {tableRows.length.toLocaleString('id-ID')} {module.id === 'tibet' ? 'kontrak' : 'baris'}</span>
           <div className="monitoring-pagination">
             <button type="button" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Sebelumnya</button>
             <span>Halaman {currentPage} / {pageCount}</span>

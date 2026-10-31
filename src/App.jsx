@@ -33,8 +33,8 @@ const MONITORING_NAV = [
   { id: 'monitoring-spb', label: 'SPB', icon: FileSpreadsheet },
   { id: 'monitoring-stock', label: 'Stock Gudang', icon: Boxes },
   { id: 'monitoring-load', label: 'Monitoring Beban', icon: Gauge },
+  { id: 'monitoring-tibet', label: 'Monitoring Tibet', icon: Activity },
   { id: 'monitoring-rabDatabase', label: 'Database RAB', icon: Database },
-  { id: 'monitoring-tibet', label: 'Mon Tibet', icon: Activity },
   { id: 'monitoring-vendor', label: 'Mon Kontrak Vendor', icon: FileText },
   { id: 'monitoring-customers', label: 'Mon Kebutuhan Pelanggan', icon: Users },
 ]
@@ -130,8 +130,12 @@ async function loadMonitoringFromSheets() {
   return result.datasets || {}
 }
 
-async function loadMonitoringSourceFromSheets() {
-  const response = await apiGet('loadMonitoringSource')
+async function loadMonitoringSourceFromSheets(moduleId) {
+  const query = new URLSearchParams({ action: 'loadMonitoringSource' })
+  if (moduleId) query.set('moduleId', moduleId)
+  const token = readSession()?.token
+  if (token) query.set('token', token)
+  const response = await fetch(`/api/apps-script?${query}`)
   const result = await response.json()
   if (!response.ok || !result.ok) throw new Error(result.error || 'Data Monitoring dari Google Sheets sumber gagal dimuat.')
   return result.datasets || {}
@@ -1012,7 +1016,7 @@ function App() {
           <button className="icon-button sidebar-toggle" aria-label={sidebarOpen ? 'Sembunyikan menu' : 'Tampilkan menu'} title={sidebarOpen ? 'Sembunyikan menu' : 'Tampilkan menu'} onClick={() => setSidebarOpen((open) => !open)}>{sidebarOpen ? <PanelLeftClose size={19} /> : <PanelLeftOpen size={19} />}</button>
           <div className="breadcrumb"><span>Monitoring PLN</span><span className="breadcrumb-slash">/</span><strong>{pageTitle}</strong></div>
           <div className="topbar-actions">
-            <div className={`sync-status ${!isMonitoringView && connection === 'cloud' ? 'is-cloud' : ''}`} title={isMonitoringView ? 'Workbook Monitoring tersimpan di browser ini' : connection === 'cloud' ? 'Google Sheets tersambung' : 'Penyimpanan browser'}>{isMonitoringView ? <FileSpreadsheet size={15} /> : connection === 'cloud' ? <Cloud size={15} /> : <CircleAlert size={15} />}<span>{isMonitoringView ? 'Data lokal' : connection === 'cloud' ? 'Google Sheets' : 'Lokal'}</span></div>
+            <div className={`sync-status ${!isMonitoringView && connection === 'cloud' ? 'is-cloud' : ''}`} title={isMonitoringView ? 'Status sinkronisasi Monitoring ditampilkan pada halaman menu yang aktif' : connection === 'cloud' ? 'Google Sheets tersambung' : 'Penyimpanan browser'}>{isMonitoringView ? <FileSpreadsheet size={15} /> : connection === 'cloud' ? <Cloud size={15} /> : <CircleAlert size={15} />}<span>{isMonitoringView ? 'Monitoring' : connection === 'cloud' ? 'Google Sheets' : 'Lokal'}</span></div>
             {auth ? <>
               <button className="button button-secondary export-button" onClick={downloadWorkbook}><ArrowDownToLine size={16} /><span>Ekspor</span></button>
               {canEdit && activeView === 'overview' && <button className="button button-secondary" disabled={dashboardSyncing || savePending || importSaving} onClick={synchronizeDashboardSource}>{dashboardSyncing ? <LoaderCircle className="toast-progress" size={16} /> : <RefreshCw size={16} />}<span>{dashboardSyncing ? 'Sinkron...' : 'Sinkron DATA AI'}</span></button>}

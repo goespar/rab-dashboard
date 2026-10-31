@@ -23,13 +23,16 @@
 .monitoring-empty-state h2 { margin: 3px 0 0; color: #26364d; font-size: 16px; }
 .monitoring-empty-state p { max-width: 490px; margin: 0 0 7px; color: #78869a; font-size: 10px; line-height: 1.6; }
 .monitoring-kpi-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
-.monitoring-kpi-grid-tibet { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.monitoring-kpi-grid-tibet { grid-template-columns: repeat(8, minmax(0, 1fr)); }
 .monitoring-kpi-card { position: relative; display: grid; min-width: 0; gap: 8px; overflow: hidden; padding: 13px 15px; }
 .monitoring-kpi-card::before { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; background: #0782bd; content: ''; }
 .monitoring-kpi-2::before { background: #23b8ca; }
 .monitoring-kpi-3::before { background: #78b76a; }
 .monitoring-kpi-4::before { background: #edab54; }
 .monitoring-kpi-5::before { background: #8172c5; }
+.monitoring-kpi-6::before { background: #0878b9; }
+.monitoring-kpi-7::before { background: #e47768; }
+.monitoring-kpi-8::before { background: #4a9a91; }
 .monitoring-kpi-label { overflow-wrap: anywhere; color: #75839a; font-size: 9px; font-weight: 650; }
 .monitoring-kpi-card > strong { overflow: hidden; color: #0878b9; font-size: clamp(16px, 2vw, 22px); font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .monitoring-kpi-card > strong.is-text { display: -webkit-box; overflow: hidden; font-size: clamp(12px, 1.45vw, 18px); line-height: 1.35; text-overflow: ellipsis; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
@@ -88,6 +91,32 @@
 .monitoring-table-scroll .monitoring-row-number { position: sticky; left: 0; z-index: 3; width: 46px; min-width: 46px; max-width: 46px; color: #8592a4; background: #f7f9fc; text-align: center; font-variant-numeric: tabular-nums; }
 .monitoring-table-scroll tbody .monitoring-row-number { z-index: 1; }
 .monitoring-table-scroll .monitoring-no-data { height: 110px; color: #8290a3; text-align: center; vertical-align: middle; }
+.tibet-detail-table { min-width: max-content !important; border-collapse: collapse !important; font-variant-numeric: tabular-nums; }
+.tibet-detail-table thead th { position: static; min-width: 46px; max-width: 110px; padding: 6px 7px; border: 1px solid #d5d9df; color: #39495c; background: #e8ebef; font-size: 8px; text-align: center; white-space: nowrap; }
+.tibet-detail-table thead th[rowspan="3"] { background: #d7dce2; }
+.tibet-detail-table thead .tibet-group-volumeKr, .tibet-detail-table thead .tibet-program-volumeKr { background: #c9e2c6; }
+.tibet-detail-table thead .tibet-group-volumePk, .tibet-detail-table thead .tibet-program-volumePk { background: #b7ddeb; }
+.tibet-detail-table thead .tibet-group-installed, .tibet-detail-table thead .tibet-program-installed { background: #f5e978; }
+.tibet-detail-table thead .tibet-group-notInstalled, .tibet-detail-table thead .tibet-program-notInstalled { background: #d9e5ee; }
+.tibet-detail-table thead .tibet-group-remainingKr, .tibet-detail-table thead .tibet-program-remainingKr { background: #c4debb; }
+.tibet-detail-table thead .tibet-size-volumeKr,
+.tibet-detail-table thead .tibet-size-volumePk,
+.tibet-detail-table thead .tibet-size-installed,
+.tibet-detail-table thead .tibet-size-notInstalled,
+.tibet-detail-table thead .tibet-size-remainingKr { min-width: 42px; }
+.tibet-detail-table thead .tibet-total-volumeKr,
+.tibet-detail-table thead .tibet-total-volumePk,
+.tibet-detail-table thead .tibet-total-installed,
+.tibet-detail-table thead .tibet-total-notInstalled,
+.tibet-detail-table thead .tibet-total-remainingKr { background: #d4dbe3; }
+.tibet-detail-table tbody td { min-width: 46px; max-width: 110px; padding: 6px 7px; border: 1px solid #e1e5ea; font-size: 8px; }
+.tibet-detail-table .tibet-detail-identity { min-width: 185px; max-width: 245px; white-space: nowrap; }
+.tibet-detail-table .tibet-detail-number { min-width: 42px; text-align: right; white-space: nowrap; }
+.tibet-detail-table .tibet-detail-total { background: #f1f4f7; font-weight: 700; }
+.tibet-detail-table .tibet-detail-note { min-width: 145px; max-width: 210px; white-space: normal; }
+.tibet-detail-table tfoot td { padding: 8px 7px; border: 1px solid #cfd7e1; color: #2e4056; background: #edf2f6; font-size: 8px; font-weight: 750; }
+.tibet-detail-table tfoot .tibet-detail-total-label { min-width: 300px; text-align: left; }
+.tibet-detail-table tfoot .tibet-detail-number { text-align: right; }
 .monitoring-table-footer { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 15px; color: #8793a4; font-size: 9px; }
 .monitoring-pagination { display: flex; align-items: center; gap: 9px; }
 .monitoring-pagination button { min-height: 27px; padding: 0 9px; border: 1px solid #dfe6ef; border-radius: 4px; color: #4b6079; background: #fff; font-size: 9px; }
