@@ -42,7 +42,7 @@ const MONITORING_SOURCE_TABS = {
   stock: { names: ['STOCK GUDANG'], required: ['NAMA MATERIAL', 'VOL GUDANG'] },
   load: { names: ['BEBAN GI DAN PYL'], required: ['PENYULANG', 'BEBAN SIANG'] },
   rabDatabase: { names: ['DATABASE_RAB', 'DATABASE RAB'], required: ['ID RAB', 'URAIAN MATERIAL'] },
-  tibet: { names: ['TIBET'], required: ['VENDOR', 'NOMOR KR'] },
+  tibet: { names: ['MONITORING TIBET'], required: ['PROG', 'PABRIKAN', 'NO KR'] },
   vendor: { names: ['MON KONTRAK VENDOR'], required: ['NOMOR KONTRAK', 'VENDOR'] },
   customers: { names: ['MON KEBUTUHAN PELANGGAN', 'MON PLG PERLUASAN'], required: ['NAMA', 'NO PK'] },
 }
@@ -50,7 +50,8 @@ const WORKFLOW_COLUMNS = {
   materials: [
     ['ID', 'id'], ['Kode', 'code'], ['Uraian Material', 'name'], ['Satuan', 'unit'], ['Kriteria', 'criteria'],
     ['Harga Material (Rp)', 'materialPrice'], ['Tarif Jasa (Rp)', 'servicePrice'], ['Jenis', 'source'], ['Catatan', 'notes'],
-    ['Kegiatan Komponen', 'componentActivity'], ['Operasi', 'operation'], ['Diimpor Dari', 'importedFrom'], ['Baris Sumber', 'sourceRow'],
+    ['No. PRK Acuan', 'prk'], ['Paket Pekerjaan', 'workPackage'], ['Kegiatan Komponen', 'componentActivity'],
+    ['Operasi', 'operation'], ['Diimpor Dari', 'importedFrom'], ['Baris Sumber', 'sourceRow'],
   ],
   activityCatalog: [
     ['ID', 'id'], ['Paket Pekerjaan', 'workPackage'], ['Nama Kegiatan', 'name'], ['Kegiatan', 'activity'], ['Satuan', 'unit'],
@@ -97,10 +98,10 @@ const DATA_HEADERS = [
   'NO.PRK', 'NO.PRK SKKI', 'NO.PRK FIX', 'NO.WBS', 'POS ANGGARAN', 'NO.RAB', 'NO.PA',
   'URAIAN', 'TOTAL PRK', 'RELOKASI', 'REVISI SKKI', 'TOTAL AKHIR', 'TOTAL RAB', 'TOTAL PA',
   'NOKONTRAK', 'VENDOR', 'NILAI KONTRAK', 'PENGEMBALIAN PA', 'PENGGANTIAN BIAYA', 'TAGIHAN',
-  'TOTAL BAYAR', 'SISA PRK', 'PROGRAM', 'TAHUN ANGGARAN', 'KETERANGAN', 'POS ANGGARAN', 'RECORD ID',
+  'TOTAL BAYAR', 'SISA PRK', 'PROGRAM', 'TAHUN ANGGARAN', 'KETERANGAN', 'POS ANGGARAN',
   'TANGGAL AWAL', 'TANGGAL AKHIR', 'RENCANA KONTRAK', 'RENCANA TAGIH',
   ...MONTHLY_BILLING_COLUMNS.map(([header]) => header),
-  'PROGRESS', 'PROYEKSI TAGIH', 'TANGGAL BAYAR',
+  'PROGRESS', 'PROYEKSI TAGIH', 'TANGGAL BAYAR', 'RECORD ID',
 ]
 
 const CLIENT_KEYS = {
@@ -130,7 +131,7 @@ function doGet(event) {
   if (action === 'loadMonitoring') return json_({ ok: true, datasets: loadMonitoring_(), user: authorization.user })
   if (action === 'loadMonitoringSource') {
     try {
-      return json_({ ok: true, datasets: loadMonitoringSource_(), user: authorization.user })
+      return json_({ ok: true, datasets: loadMonitoringSource_(event.parameter.moduleId), user: authorization.user })
     } catch (error) {
       return json_({ ok: false, error: error.message || 'Data Google Sheets sumber gagal dimuat.' })
     }
@@ -291,14 +292,18 @@ function loadMonitoring_() {
   return datasets
 }
 
-function loadMonitoringSource_() {
+function loadMonitoringSource_(requestedModuleId) {
   const sourceId = PropertiesService.getScriptProperties().getProperty('MONITORING_SOURCE_SPREADSHEET_ID')
     || MONITORING_SOURCE_SPREADSHEET_ID
   const spreadsheet = SpreadsheetApp.openById(sourceId)
   const datasets = {}
   const missing = []
 
-  Object.keys(MONITORING_SOURCE_TABS).forEach((moduleId) => {
+  if (requestedModuleId && !Object.prototype.hasOwnProperty.call(MONITORING_SOURCE_TABS, requestedModuleId)) {
+    throw new Error('Menu Monitoring sumber tidak dikenal.')
+  }
+  const moduleIds = requestedModuleId ? [requestedModuleId] : Object.keys(MONITORING_SOURCE_TABS)
+  moduleIds.forEach((moduleId) => {
     const config = MONITORING_SOURCE_TABS[moduleId]
     const sheet = config.names.map((name) => findMonitoringSourceSheet_(spreadsheet, name)).find(Boolean)
     if (!sheet || sheet.getLastRow() < 1 || sheet.getLastColumn() < 1) {
@@ -587,8 +592,16 @@ function ensureDataHeaders_(sheet) {
   if (missingHeaders.length) {
     const lastHeaderColumn = headers.reduce((last, header, index) => String(header || '').trim() ? index + 1 : last, 0)
     sheet.getRange(1, lastHeaderColumn + 1, 1, missingHeaders.length).setValues([missingHeaders])
+    headers = sheet.getDataRange().getValues()[0] || []
   }
-  formatMonthlyBillingColumns_(sheet, sheet.getDataRange().getValues()[0] || [])
+  const recordIdIndex = headers.findIndex((header) => String(header || '').trim() === 'RECORD ID')
+  const lastHeaderColumn = headers.reduce((last, header, index) => String(header || '').trim() ? index + 1 : last, 0)
+  if (recordIdIndex >= 0 && recordIdIndex + 1 < lastHeaderColumn && typeof sheet.moveColumns === 'function') {
+    if (lastHeaderColumn >= sheet.getMaxColumns()) sheet.insertColumnsAfter(lastHeaderColumn, 1)
+    sheet.moveColumns(sheet.getRange(1, recordIdIndex + 1, sheet.getMaxRows(), 1), lastHeaderColumn + 1)
+    headers = sheet.getDataRange().getValues()[0] || []
+  }
+  formatMonthlyBillingColumns_(sheet, headers)
 }
 
 function formatMonthlyBillingColumns_(sheet, headers) {

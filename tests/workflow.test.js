@@ -359,12 +359,14 @@ test('preserves monthly invoices, sums billing, and keeps projection independent
   }
   assert.equal(save(novemberRecord).ok, true)
 
+  const savedHeaders = dataSheet.values[0]
   const row = dataSheet.values[1]
-  assert.equal(row[dataHeaders.indexOf('TAGIHAN OKTOBER')], 10000000)
-  assert.equal(row[dataHeaders.indexOf('TAGIHAN NOPEMBER')], 5000000)
-  assert.equal(row[dataHeaders.indexOf('TAGIHAN')], 15000000)
-  assert.equal(row[dataHeaders.indexOf('PROYEKSI TAGIH')], 900000)
-  assert.equal(row[dataHeaders.indexOf('TOTAL BAYAR')], 3000000)
+  assert.equal(savedHeaders.at(-1), 'RECORD ID')
+  assert.equal(row[savedHeaders.indexOf('TAGIHAN OKTOBER')], 10000000)
+  assert.equal(row[savedHeaders.indexOf('TAGIHAN NOPEMBER')], 5000000)
+  assert.equal(row[savedHeaders.indexOf('TAGIHAN')], 15000000)
+  assert.equal(row[savedHeaders.indexOf('PROYEKSI TAGIH')], 900000)
+  assert.equal(row[savedHeaders.indexOf('TOTAL BAYAR')], 3000000)
 })
 
 test('imports activity PRKs using their column headers rather than fixed positions', async () => {

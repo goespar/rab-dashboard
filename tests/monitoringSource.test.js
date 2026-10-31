@@ -20,7 +20,11 @@ test('loads Monitoring data from the configured Google Sheets source', async () 
     ['STOCK GUDANG', new MockSheet('STOCK GUDANG', [['NAMA MATERIAL', 'VOL GUDANG'], ['Kabel', 5]])],
     ['BEBAN GI DAN PYL', new MockSheet('BEBAN GI DAN PYL', [['PENYULANG', 'BEBAN SIANG'], ['Penyulang A', 10]])],
     ['DATABASE_RAB', new MockSheet('DATABASE_RAB', [['ID RAB', 'URAIAN MATERIAL'], ['RAB-1', 'Kabel']])],
-    ['Tibet', new MockSheet('Tibet', [['Daftar Tibet'], ['VENDOR', 'NOMOR KR'], ['Vendor A', 'KR-1']])],
+    ['MONITORING TIBET', new MockSheet('MONITORING TIBET', [
+      ['POS', 'PROG', 'TAHUN', 'UKURAN', 'PABRIKAN', 'NO KR', 'VOL KR', 'NO PK', 'VOL PK', 'SISA KR', 'SDH PSG', 'BLM PSG'],
+      ['62', 'SAR', 2026, 9, 'Vendor A', 'KR-1', 100, 'PK-1', 80, 20, 50, 30],
+    ])],
+    ['TIBET', new MockSheet('TIBET', [['VENDOR', 'NOMOR KR'], ['Wrong source', 'KR-OLD']])],
     ['MON KONTRAK VENDOR', new MockSheet('MON KONTRAK VENDOR', [['NOMOR KONTRAK', 'VENDOR'], ['KONTRAK-1', 'Vendor A']])],
     ['MON PLG PERLUASAN', new MockSheet('MON PLG PERLUASAN', [['NAMA', 'NO PK'], ['Pelanggan A', 'PK-1']])],
   ])
@@ -48,8 +52,21 @@ test('loads Monitoring data from the configured Google Sheets source', async () 
   assert.equal(result.ok, true, result.error)
   assert.equal(openedId, '1E330xkEvgia8w4n43eWIg8_854sX3VS7zqcrO5rXdWc')
   assert.equal(Object.keys(result.datasets).length, 7)
-  assert.equal(result.datasets.tibet.sheetName, 'Tibet')
-  assert.deepEqual(Array.from(result.datasets.tibet.headers), ['VENDOR', 'NOMOR KR'])
-  assert.deepEqual(Array.from(result.datasets.tibet.rows[0]), ['Vendor A', 'KR-1'])
+  assert.equal(result.datasets.tibet.sheetName, 'MONITORING TIBET')
+  assert.deepEqual(Array.from(result.datasets.tibet.headers).slice(0, 6), ['POS', 'PROG', 'TAHUN', 'UKURAN', 'PABRIKAN', 'NO KR'])
+  assert.deepEqual(Array.from(result.datasets.tibet.rows[0]).slice(0, 6), ['62', 'SAR', 2026, 9, 'Vendor A', 'KR-1'])
   assert.equal(result.datasets.customers.sheetName, 'MON PLG PERLUASAN')
+
+  const tibetOnly = JSON.parse(context.doGet({
+    parameter: { action: 'loadMonitoringSource', moduleId: 'tibet', token: 'test' },
+  }).text)
+  assert.equal(tibetOnly.ok, true, tibetOnly.error)
+  assert.deepEqual(Object.keys(tibetOnly.datasets), ['tibet'])
+  assert.equal(tibetOnly.datasets.tibet.sheetName, 'MONITORING TIBET')
+
+  const invalidModule = JSON.parse(context.doGet({
+    parameter: { action: 'loadMonitoringSource', moduleId: 'unknown', token: 'test' },
+  }).text)
+  assert.equal(invalidModule.ok, false)
+  assert.match(invalidModule.error, /Menu Monitoring sumber tidak dikenal/)
 })

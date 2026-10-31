@@ -2,6 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import ExcelJS from 'exceljs'
 import { getTibetDisplayRows, importMonitoringWorkbook } from '../src/lib/monitoringWorkbook.js'
+import {
+  buildTibetDetailRows, buildTibetMetrics, buildTibetProgramChart, buildTibetVendorChart,
+  getTibetMetricTotal, normalizeTibetRows,
+} from '../src/lib/tibetMonitoring.js'
 
 async function makeWorkbookFile() {
   const workbook = new ExcelJS.Workbook()
@@ -21,10 +25,10 @@ async function makeWorkbookFile() {
     ['UPDATED_AT', 'ID RAB', 'PRK', 'NAMA FILE', 'REKAP AKTIF', 'SHEET DETAIL', 'BARIS', 'URAIAN MATERIAL', 'VOLUME', 'JENIS PEKERJAAN', 'HARGA SATUAN'],
     ['2026-01-01', 'RAB-1', 'PRK-1', 'rab.xlsx', 'REKAP JTM', 'JTM', 2, 'Kabel', 5, 'PASANG', 1000],
   ])
-  workbook.addWorksheet('Tibet').addRows([
-    ['VENDOR', 'NOMOR KR', 'JENIS TIBET', 'NO PK', 'POS', 'VOL KR', 'VOL PK', 'VOL PASANG', 'SISA KR', 'SISA PK'],
-    ['Vendor A', 'KR-1', 'TM', 'PK-1', '61', 10, 8, 3, 2, 5],
-    ['', '', '', 'PK-2', '61', 0, 4, 2, 0, 2],
+  workbook.addWorksheet('MONITORING TIBET').addRows([
+    ['POS', 'PROG', 'TAHUN', 'UKURAN', 'PABRIKAN', 'NO KR', 'TGL KR', 'VOL KR', 'NO PK', 'VOL PK', 'SISA KR', 'SDH PSG', 'BLM PSG'],
+    ['61', 'SAR', 2026, 9, 'Vendor A', 'KR-1', '', 10, 'PK-1', 8, 2, 3, 5],
+    ['61', 'SAR', 2026, 9, 'Vendor A', 'KR-1', '', 10, 'PK-2', 4, 2, 2, 2],
   ])
   const vendorHeaders = Array(29).fill('')
   Object.assign(vendorHeaders, {
@@ -60,10 +64,27 @@ test('imports all Monitoring sheets and preserves workbook cross references', as
   assert.equal(data.vendor.rows[0][28], 'OPEN')
   assert.equal(data.vendor.rows[1][0], '')
   assert.equal(data.vendor.rows[1][28], 'OPEN')
-  assert.equal(data.tibet.rows[1][0], '')
-  assert.equal(data.tibet.rows[1][1], '')
-  assert.equal(data.tibet.rows[1][3], 'PK-2')
+  assert.equal(data.tibet.sheetName, 'MONITORING TIBET')
+  assert.equal(data.tibet.rows[1][4], 'Vendor A')
+  assert.equal(data.tibet.rows[1][5], 'KR-1')
+  assert.equal(data.tibet.rows[1][8], 'PK-2')
   assert.equal(data.customers.rows[0][1], 'Pelanggan A')
+})
+
+test('imports only MONITORING TIBET from a single-sheet workbook', async () => {
+  const workbook = new ExcelJS.Workbook()
+  workbook.addWorksheet('MONITORING TIBET').addRows([
+    ['POS', 'PROG', 'TAHUN', 'UKURAN', 'PABRIKAN', 'NO KR', 'VOL KR', 'NO PK', 'VOL PK', 'SISA KR', 'SDH PSG', 'BLM PSG'],
+    ['62', 'SAR', 2026, 9, 'Vendor A', 'KR-1', 100, 'PK-1', 80, 20, 50, 30],
+  ])
+  const buffer = await workbook.xlsx.writeBuffer()
+  const file = { arrayBuffer: async () => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) }
+  const data = await importMonitoringWorkbook(file, undefined, { moduleId: 'tibet' })
+
+  assert.deepEqual(Object.keys(data), ['tibet'])
+  assert.equal(data.tibet.sheetName, 'MONITORING TIBET')
+  assert.equal(data.tibet.rows.length, 1)
+  await assert.rejects(importMonitoringWorkbook(file, undefined, { moduleId: 'unknown' }), /Menu Monitoring untuk impor tidak dikenal/)
 })
 
 test('displays repeated saved Tibet group labels only on the first row', () => {
@@ -82,6 +103,80 @@ test('displays repeated saved Tibet group labels only on the first row', () => {
   assert.deepEqual(displayRows[2], rows[2])
   assert.deepEqual(displayRows[3], rows[3])
   assert.deepEqual(rows[1].slice(0, 3), ['Vendor A', 'KR-1', '13'])
+})
+
+test('summarizes Tibet KR and PK volumes once and builds program and vendor charts', () => {
+  const headers = ['POS', 'PROG', 'TAHUN', 'UKURAN', 'PABRIKAN', 'NO KR', 'VOL KR', 'NO PK', 'VOL PK', 'SISA KR', 'SDH PSG', 'BLM PSG']
+  const rows = [
+    ['62', 'SAR', 2026, 9, 'Vendor A', 'KR-1', 200, 'PK-1', 141, 59, 66, 75],
+    ['62', 'SAR', 2026, 9, 'Vendor A', 'KR-1', 200, 'PK-2', 141, 59, 126, 15],
+    ['62', 'SAR', 2026, 13, 'Vendor A', 'KR-2', 100, 'BLM PK', '', 100, '', 0],
+    ['61', 'SUT', 2026, 13, 'Vendor B', 'KR-3', 50, 'PK-3', 40, 10, 10, 30],
+  ]
+
+  assert.deepEqual(buildTibetMetrics(headers, rows), {
+    krCount: 3,
+    pkCount: 3,
+    volumeKr: 350,
+    volumePk: 322,
+    installed: 202,
+    remainingKr: 169,
+    remainingPk: 1,
+    notInstalled: 120,
+  })
+
+  const programChart = buildTibetProgramChart(headers, rows)
+  assert.deepEqual(programChart.data, [
+    { name: 'SAR', 'VOL KR 9': 200, 'VOL KR 13': 100, 'VOL PK 9': 282, 'VOL PK 13': 0 },
+    { name: 'SUT', 'VOL KR 9': 0, 'VOL KR 13': 50, 'VOL PK 9': 0, 'VOL PK 13': 40 },
+  ])
+  const vendorChart = buildTibetVendorChart(headers, rows)
+  assert.deepEqual(vendorChart.data, [
+    { name: 'Vendor A', 'VOL KR 9': 200, 'VOL KR 13': 100 },
+    { name: 'Vendor B', 'VOL KR 9': 0, 'VOL KR 13': 50 },
+  ])
+})
+
+test('builds the Tibet detail matrix grouped by KR and vendor with program, size, and totals', () => {
+  const headers = ['POS', 'PROG', 'TAHUN', 'UKURAN', 'PABRIKAN', 'NO KR', 'VOL KR', 'NO PK', 'VOL PK', 'SISA KR', 'SDH PSG', 'BLM PSG']
+  const rows = [
+    ['62', 'SAR', 2026, 9, 'Vendor A', 'KR-1', 200, 'PK-1', 100, 100, 60, 40],
+    ['62', 'SAR', 2026, 9, 'Vendor A', 'KR-1', 200, 'PK-2', 100, 100, 40, 60],
+    ['62', 'SAR', 2026, 13, 'Vendor A', 'KR-1', 80, 'PK-3', 80, 0, 80, 0],
+    ['61', 'SUT', 2026, 13, 'Vendor B', 'KR-2', 50, 'BLM PK', '', 50, '', 0],
+  ]
+
+  const details = buildTibetDetailRows(headers, rows)
+
+  assert.equal(details.length, 2)
+  assert.equal(details[0].kr, 'KR-1')
+  assert.equal(details[0].vendor, 'Vendor A')
+  assert.equal(details[0].volumeKr.SAR[9], 200)
+  assert.equal(details[0].volumeKr.SAR[13], 80)
+  assert.equal(details[0].volumePk.SAR[9], 200)
+  assert.equal(details[0].installed.SAR[9], 100)
+  assert.equal(details[0].notInstalled.SAR[9], 100)
+  assert.equal(details[0].remainingKr.SAR[9], 100)
+  assert.equal(getTibetMetricTotal(details[0], 'volumeKr'), 280)
+  assert.equal(details[1].notes, 'BELUM PK')
+})
+
+test('fills merged Tibet header cells without carrying a KR into a new vendor group', () => {
+  const headers = ['POS', 'PROG', 'TAHUN', 'UKURAN', 'PABRIKAN', 'NO KR', 'VOL KR', 'NO PK', 'VOL PK', 'SISA KR', 'SDH PSG', 'BLM PSG']
+  const rows = [
+    ['62', 'SAR', 2026, 9, 'Vendor A', 'KR-1', 200, 'PK-1', 100, 100, 50, 50],
+    ['', '', '', '', '', '', '', 'PK-2', 100, '', 50, 50],
+    ['', '', '', '', 'Vendor B', '', 75, 'BLM PK', '', 75, '', 0],
+  ]
+
+  const normalized = normalizeTibetRows(headers, rows)
+
+  assert.equal(normalized[1][1], 'SAR')
+  assert.equal(normalized[1][5], 'KR-1')
+  assert.equal(normalized[1][6], 200)
+  assert.equal(normalized[2][4], 'Vendor B')
+  assert.equal(normalized[2][5], '')
+  assert.equal(normalized[2][6], 75)
 })
 
 test('reports which Monitoring sheet is missing', async () => {
